@@ -82,6 +82,25 @@ class voletautobe extends eqLogic {
      * suffisent : la marque ne sert qu'à ne pas rejouer le même jour. */
     const DONE_MEMORY = 259200;
 
+    /*
+     * L'attente entre deux ordres d'un même groupe, en millisecondes.
+     *
+     * Huit volets commandés dans la même milliseconde, ce sont huit trames
+     * radio qui se chevauchent : en 433 MHz une ou deux se perdent, un volet ne
+     * bouge pas, et aucune erreur n'est levée puisque la commande a bien été
+     * jouée. C'est la panne la plus difficile à voir de tout le plugin, et elle
+     * se corrige en laissant respirer la passerelle. Réglable dans la
+     * configuration du plugin, 0 pour envoyer tout d'un coup.
+     */
+    const DEFAULT_ORDER_DELAY = 400;
+    const ORDER_DELAY_MAX     = 5000;
+
+    /* Et son garde-fou : l'attente totale d'un groupe, en secondes. Cent volets
+     * à 500 ms bloqueraient le cron du coeur cinquante secondes, au-delà de sa
+     * propre limite d'exécution — un réglage de confort ne doit pas pouvoir
+     * arrêter la programmation de toute la maison. */
+    const ORDER_SPREAD_MAX = 30;
+
     /* Jours en toutes lettres : IntlDateFormatter n'est pas garanti présent sur
      * toutes les installations Jeedom. */
     public static $_days = array(1 => 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche');
@@ -161,6 +180,14 @@ class voletautobe extends eqLogic {
 
     public static function graceSeconds() {
         return max(1, (int) config::byKey('grace_minutes', __CLASS__, self::DEFAULT_GRACE_MINUTES)) * 60;
+    }
+
+    /* Le délai entre deux ordres, borné. Zéro est une valeur légitime — une
+     * installation entièrement filaire n'a rien à gagner à attendre — et c'est
+     * pourquoi la borne basse est 0 et non 1, contrairement au rattrapage. */
+    public static function orderDelay() {
+        return max(0, min(self::ORDER_DELAY_MAX,
+            (int) config::byKey('order_delay', __CLASS__, self::DEFAULT_ORDER_DELAY)));
     }
 
     /* ===================================================== CYCLE DE VIE eqLogic */
@@ -262,6 +289,11 @@ class voletautobe extends eqLogic {
     public function preRemove() {
         foreach (self::SLOTS as $key) {
             cache::delete($this->doneKey($key));
+            /* Les deux marques sont nettoyées ensemble : une marque de
+             * mouvement oubliée survivrait à l'équipement, et le groupe recréé
+             * sous le même identifiant croirait sa protection solaire déjà
+             * jouée le jour même. */
+            cache::delete($this->movedKey($key));
         }
         message::removeAll(__CLASS__, $this->failureKey());
     }
@@ -572,6 +604,23 @@ class voletautobe extends eqLogic {
         return __CLASS__ . '::done::' . $this->getId() . '::' . $_key;
     }
 
+    /*
+     * La seconde marque : le moment a-t-il vraiment BOUGÉ aujourd'hui ?
+     *
+     * doneKey() dit qu'un moment a été évalué — il est posé avant même les
+     * conditions, et le reste quand elles écartent l'ordre. C'est ce qu'il faut
+     * pour ne pas rejouer, et c'est exactement ce qu'il ne faut pas pour savoir
+     * si la protection solaire a fermé quelque chose. D'où celle-ci, posée
+     * après un applyAction() qui a envoyé au moins un ordre, et elle seule
+     * répond à la question que pose la fin de protection.
+     *
+     * Même durée de vie que l'autre, et même nettoyage : preRemove() et
+     * voletautobe_remove().
+     */
+    public function movedKey($_key) {
+        return __CLASS__ . '::moved::' . $this->getId() . '::' . $_key;
+    }
+
     public function failureKey() {
         return __CLASS__ . '::failure::' . $this->getId();
     }
@@ -653,6 +702,22 @@ class voletautobe extends eqLogic {
         cache::set($doneKey, $due['day'], self::DONE_MEMORY);
 
         /*
+         * Le couplage protection / fin de protection, avant toute condition.
+         *
+         * Avant les deux autres contrôles, et il le faut : quand la protection
+         * n'a pas eu lieu, il n'y a rien à rouvrir, et annoncer « trop froid »
+         * ou « soleil hors de la fenêtre » enverrait l'utilisateur corriger un
+         * réglage qui n'a rien de faux. La vraie raison est ailleurs, et elle
+         * est plus haute que les conditions du moment.
+         */
+        if (!$this->shadeEndAllowed($_key, $due['day'])) {
+            $text = self::shadeEndSkipText();
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . $text);
+            $this->checkAndUpdateCmd('last', $text . ' ' . self::humanDate(time()));
+            return false;
+        }
+
+        /*
          * La condition de soleil, sur la position de l'instant.
          *
          * Elle s'évalue avant celle de température, et l'ordre se lit dans le
@@ -706,19 +771,87 @@ class voletautobe extends eqLogic {
                . ($check['known'] ? '' : ' — ' . __('sonde muette, ordre envoyé quand même', __FILE__))
                . ($sunCheck['known'] ? '' : ' — ' . __('position du soleil inconnue, ordre envoyé quand même', __FILE__)));
 
-        $this->applyAction($slot['action'], $slot['position'], true, 'schedule');
+        $result = $this->applyAction($slot['action'], $slot['position'], true, 'schedule');
+        /* La marque de mouvement, et seulement si un ordre est parti : un
+         * groupe vide, ou dont tous les volets ont échoué, n'a rien fermé, et
+         * la fin de protection n'aurait rien à rouvrir. Voir movedKey(). */
+        if ($result['sent'] > 0) {
+            cache::set($this->movedKey($_key), $due['day'], self::DONE_MEMORY);
+        }
         return true;
+    }
+
+    /*
+     * La fin de protection ne défait que ce que la protection a fait.
+     *
+     * Un jour à 19 °C, la protection solaire est sautée — seuil 26 °C — et à
+     * 18:03 la fin de protection ouvrait quand même les volets. S'ils étaient
+     * fermés parce que quelqu'un faisait la sieste, ou pour ne pas être vu de
+     * la rue, l'automatisme défaisait un geste que personne ne lui avait
+     * demandé de défaire. C'est le pire reproche qu'on puisse faire à un plugin
+     * de ce genre, et il ne se voit qu'après coup.
+     *
+     * D'où la règle : la fin de protection n'agit que si la protection a
+     * réellement bougé le jour même — pas seulement si elle a été évaluée, d'où
+     * movedKey() et non doneKey().
+     *
+     * L'EXCEPTION COMPTE AUTANT QUE LA RÈGLE, et c'est elle qui empêche la
+     * correction de devenir à son tour un piège : quand « Protection solaire »
+     * est décochée, la fin de protection agit seule. Le couplage existe pour ne
+     * pas défaire une protection qui n'a pas eu lieu ; si aucune protection
+     * n'est configurée, le moment est autonome, et « ouvrir en fin d'après-midi,
+     * quand le soleil quitte la façade » est un réglage légitime en soi. Sans
+     * cette exception, un utilisateur qui n'a jamais activé la protection
+     * verrait sa réouverture cesser du jour au lendemain, à une mise à jour,
+     * sans que rien ne le dise — exactement la panne silencieuse que tout ce
+     * plugin cherche à éviter.
+     *
+     * Les trois autres moments ne sont couplés à rien et passent toujours.
+     */
+    private function shadeEndAllowed($_key, $_day) {
+        if ($_key != 'shade_end') {
+            return true;
+        }
+        $heat = $this->slotConfig('heat');
+        if ($heat['enable'] != 1) {
+            return true;
+        }
+        return (cache::byKey($this->movedKey('heat'))->getValue('') === $_day);
+    }
+
+    /* Le compte rendu du saut, dans le journal et dans « Dernier changement »,
+     * comme pour les deux conditions : le moment est marqué joué malgré tout —
+     * la décision se prend une fois, à l'heure dite. */
+    private static function shadeEndSkipText() {
+        /* Le deux-points fait partie de la chaîne traduite : le français met une
+         * espace devant, l'anglais la colle. Le laisser en dur ici donnerait
+         * « End of protection skipped : … » dans une interface anglaise. */
+        return self::slotName('shade_end') . ' ' . __('sautée :', __FILE__) . ' '
+             . self::shadeEndReason();
+    }
+
+    /* Le motif seul, comme temperatureReason() et sunReason(), et pour la même
+     * raison : l'essai le reprend au conditionnel. */
+    private static function shadeEndReason() {
+        return __('la protection solaire n\'a pas eu lieu aujourd\'hui', __FILE__);
     }
 
     /* « Le matin sauté : 1,5 °C, seuil 5 °C ». La mesure et le seuil, tous les
      * deux : « trop froid » seul obligerait à ouvrir la configuration pour
      * savoir de combien on a manqué le seuil. */
     private function skipText($_key, $_slot, $_temperature) {
+        return self::skipPrefix($_key) . self::temperatureReason($_slot, $_temperature);
+    }
+
+    /* Le motif seul — « 1,5 °C, seuil 5 °C » —, sans le moment ni le fait qu'il
+     * a été sauté. Deux phrases l'emploient : le compte rendu du saut réel, à
+     * l'heure dite, et celui de l'essai, qui dit ce qui se serait passé. Les
+     * écrire deux fois, c'est les voir diverger. */
+    private static function temperatureReason($_slot, $_temperature) {
         $measured = ($_temperature === null)
             ? __('sonde muette', __FILE__)
             : self::formatTemperature($_temperature);
-        return self::skipPrefix($_key) . $measured
-             . ', ' . __('seuil', __FILE__) . ' ' . self::formatTemperature($_slot['temp_value']);
+        return $measured . ', ' . __('seuil', __FILE__) . ' ' . self::formatTemperature($_slot['temp_value']);
     }
 
     /* « Protection solaire sauté : soleil à 8,4°, minimum 15° », « Protection
@@ -728,13 +861,16 @@ class voletautobe extends eqLogic {
      * ouvrir la configuration. La hauteur d'abord, parce qu'un soleil sous
      * l'horizon a un azimut parfaitement défini et parfaitement hors sujet. */
     private function sunSkipText($_key, $_slot, $_sun, $_reason) {
+        return self::skipPrefix($_key) . self::sunReason($_slot, $_sun, $_reason);
+    }
+
+    /* Le motif seul, pour la même raison que temperatureReason(). */
+    private static function sunReason($_slot, $_sun, $_reason) {
         if ($_reason == 'too_low') {
-            return self::skipPrefix($_key)
-                 . __('soleil à', __FILE__) . ' ' . self::formatAngle($_sun['elevation'])
+            return __('soleil à', __FILE__) . ' ' . self::formatAngle($_sun['elevation'])
                  . ', ' . __('minimum', __FILE__) . ' ' . self::formatAngle($_slot['sun_elevation']);
         }
-        return self::skipPrefix($_key)
-             . __('soleil au', __FILE__) . ' ' . self::azimuthText($_sun['azimuth'])
+        return __('soleil au', __FILE__) . ' ' . self::azimuthText($_sun['azimuth'])
              . ', ' . __('fenêtre', __FILE__) . ' '
              . self::formatAngle($_slot['sun_from']) . '–' . self::formatAngle($_slot['sun_to']);
     }
@@ -742,7 +878,120 @@ class voletautobe extends eqLogic {
     /* Le début commun des deux comptes rendus de saut : le moment, et le fait
      * qu'il n'a rien envoyé. Ce qui suit est le motif, et lui seul change. */
     private static function skipPrefix($_key) {
-        return self::slotName($_key) . ' ' . __('sauté', __FILE__) . ' : ';
+        return self::slotName($_key) . ' ' . __('sauté :', __FILE__) . ' ';
+    }
+
+    /* ================================================================== ESSAI */
+
+    /*
+     * Jouer un moment maintenant, et dire ce que ses conditions auraient dit.
+     *
+     * Les boutons d'essai du groupe commandent Ouvrir, Fermer et Stop : aucun
+     * ne joue ce que fera la protection solaire, avec son action, son
+     * pourcentage et ses conditions, et il fallait donc attendre le lendemain
+     * pour vérifier la chaîne complète.
+     *
+     * L'ordre part sans se soucier des conditions — un bouton d'essai qui ne
+     * fait rien parce qu'il fait 18 °C serait incompréhensible — mais le compte
+     * rendu dit ce qui se serait passé à l'heure dite : « Fermeture à 30 %
+     * envoyée à 4 volets. Au moment venu, ce moment aurait été sauté : 18,2 °C,
+     * seuil 26 °C. » C'est ce second membre de phrase qui a de la valeur.
+     *
+     * AUCUNE MARQUE D'EXÉCUTION N'EST POSÉE, ni doneKey() ni movedKey(), et
+     * c'est le point à ne pas perdre de vue : un essai qui marquerait le moment
+     * joué empêcherait la protection solaire de se jouer pour de vrai le jour
+     * même, et la fin de protection de rouvrir le soir. Celui qui essaie son
+     * réglage à midi le casserait pour la journée, sans le savoir et sans que
+     * rien ne le dise — un bouton de vérification qui sabote ce qu'il vérifie
+     * est pire que pas de bouton du tout.
+     *
+     * Rend array('sent', 'errors', 'action', 'conditions', 'would').
+     */
+    public function testSlot($_key) {
+        if (!in_array($_key, self::SLOTS, true)) {
+            /* Plutôt qu'un repli sur le premier moment : jouer « Le matin » à
+             * la place d'une clé inconnue ouvrirait tous les volets de la
+             * maison pour un essai que personne n'a demandé. */
+            throw new Exception(__('moment inconnu :', __FILE__) . ' ' . $_key);
+        }
+        $slot = $this->slotConfig($_key);
+
+        /* Les conditions d'abord, l'ordre ensuite : l'envoi peut durer —
+         * l'étalement des ordres attend jusqu'à trente secondes pour un grand
+         * groupe — et le compte rendu doit décrire l'instant où l'on a appuyé,
+         * pas celui où le dernier volet a reçu sa trame. */
+        $conditions = $this->slotConditions($_key, $slot);
+        $result = $this->applyAction($slot['action'], $slot['position'], true, 'test');
+
+        return array(
+            'sent'       => $result['sent'],
+            'errors'     => $result['errors'],
+            'action'     => self::orderNoun($slot['action'], $slot['position']),
+            'conditions' => $conditions['text'],
+            'would'      => $conditions['would'] ? 1 : 0,
+        );
+    }
+
+    /*
+     * Ce que les conditions d'un moment diraient si on était à son heure.
+     *
+     * Exactement ce que runSlot() évalue une fois le rendez-vous tombé, et dans
+     * le même ordre — couplage, soleil, température : le compte rendu de
+     * l'essai doit désigner la même cause que le journal du lendemain, sans
+     * quoi l'essai envoie corriger le mauvais réglage.
+     *
+     * L'heure, les jours cochés et les garde-fous n'y sont pas : ils décident
+     * QUAND le moment tombe, ce que l'aperçu des trois prochaines occurrences
+     * montre déjà, et qui n'a aucun sens à l'instant d'un essai.
+     */
+    private function slotConditions($_key, $_slot) {
+        if ($_slot['enable'] != 1) {
+            /* Un moment décoché ne se jouera jamais, quelles que soient ses
+             * conditions : le dire ici évite un « aurait été joué » suivi d'un
+             * lendemain où rien ne bouge. */
+            return array('would' => false,
+                         'text'  => __('Ce moment est désactivé : il ne se jouera pas tant que sa case n\'est pas cochée.', __FILE__));
+        }
+
+        if (!$this->shadeEndAllowed($_key, date('Y-m-d'))) {
+            return array('would' => false, 'text' => self::wouldSkip(self::shadeEndReason()));
+        }
+
+        $sun = self::sunNow();
+        $sunCheck = voletautobeSun::sunCheck($_slot, $sun['azimuth'], $sun['elevation']);
+        if (!$sunCheck['met']) {
+            return array('would' => false, 'text' => self::wouldSkip(self::sunReason($_slot, $sun, $sunCheck['reason'])));
+        }
+
+        $temperature = $this->temperature();
+        $check = voletautobeSun::temperatureCheck($_slot, $temperature);
+        if (!$check['met']) {
+            return array('would' => false, 'text' => self::wouldSkip(self::temperatureReason($_slot, $temperature)));
+        }
+
+        /* Le moment se serait joué — mais peut-être faute de savoir. Une sonde
+         * muette et une position du soleil incalculable laissent passer l'ordre
+         * par choix, et c'est précisément ce que l'essai doit montrer : la
+         * condition est écrite, elle ne filtre rien. */
+        $notes = array();
+        if (!$sunCheck['known']) {
+            $notes[] = __('position du soleil inconnue, ordre envoyé quand même', __FILE__);
+        }
+        if (!$check['known']) {
+            $notes[] = __('sonde muette, ordre envoyé quand même', __FILE__);
+        }
+        if (count($notes) == 0) {
+            return array('would' => true, 'text' => __('Au moment venu, ce moment aurait été joué.', __FILE__));
+        }
+        return array('would' => true,
+                     'text'  => __('Au moment venu, ce moment aurait été joué :', __FILE__)
+                              . ' ' . implode(', ', $notes) . '.');
+    }
+
+    /* « Au moment venu, ce moment aurait été sauté : 18,2 °C, seuil 26 °C. » Le
+     * même motif que le journal écrirait à l'heure dite, au conditionnel. */
+    private static function wouldSkip($_reason) {
+        return __('Au moment venu, ce moment aurait été sauté :', __FILE__) . ' ' . $_reason . '.';
     }
 
     /* ============================================================ TEMPÉRATURE */
@@ -982,7 +1231,46 @@ class voletautobe extends eqLogic {
             $errors[] = __('aucun volet dans ce groupe', __FILE__);
         }
 
+        /*
+         * L'étalement des ordres, et son plafond.
+         *
+         * Le délai réglé vaut pour l'immense majorité des groupes ; c'est le
+         * groupe démesuré qui est dangereux — cent volets à 500 ms tiendraient
+         * le cron du coeur cinquante secondes, au-delà de sa limite
+         * d'exécution, et c'est alors toute la programmation de la maison qui
+         * s'arrête. Le délai est donc réduit pour tenir dans le plafond plutôt
+         * que le groupe abandonné.
+         *
+         * Le fait est écrit en debug et non en info : c'est un détail
+         * d'exécution, pas un événement dont l'utilisateur doive être averti
+         * chaque matin dans un journal qu'il relira un jour.
+         */
+        $count = is_array($volets) ? count($volets) : 0;
+        $delay = self::orderDelay();
+        if ($count > 1 && $delay * ($count - 1) > self::ORDER_SPREAD_MAX * 1000) {
+            $reduced = (int) floor((self::ORDER_SPREAD_MAX * 1000) / ($count - 1));
+            log::add(__CLASS__, 'debug', $this->getHumanName() . ' : '
+                   /* Une flèche plutôt que « de … à … » : le mot « à » est déjà
+                    * traduit ailleurs par « at », qui convient à « à 18:03 » et
+                    * pas du tout à « de 500 à 300 ms ». Un même fragment ne
+                    * peut pas servir deux phrases qui ne se traduisent pas
+                    * pareil, et la flèche ne se traduit pas du tout. */
+                   . __('délai entre ordres ramené de', __FILE__) . ' ' . $delay
+                   . ' → ' . $reduced . ' ms — '
+                   . $count . ' ' . __('volets, attente plafonnée à', __FILE__) . ' '
+                   . self::ORDER_SPREAD_MAX . ' s');
+            $delay = $reduced;
+        }
+
+        $firstOrder = true;
         foreach (is_array($volets) ? $volets : array() as $volet) {
+            /* Entre deux volets, et jamais après le dernier : attendre une fois
+             * le dernier ordre parti ne sert personne et allonge le cron pour
+             * rien. L'attente précède donc l'ordre, sauf pour le premier. */
+            if (!$firstOrder && $delay > 0) {
+                usleep($delay * 1000);
+            }
+            $firstOrder = false;
             try {
                 $this->pushVolet($volet, $action, $position);
                 $sent++;
@@ -1611,11 +1899,24 @@ class voletautobe extends eqLogic {
         $location = self::hasLocation();
         $groups = self::byType(__CLASS__, true);
         $volets = 0;
+        $missing = 0;
         $paused = 0;
         $blindConditions = 0;
         $blindWindows = 0;
         foreach ($groups as $eqLogic) {
-            $volets += count($eqLogic->voletList());
+            /* La liste est demandée une fois et relue deux fois : elle résout
+             * chaque équipement, et la page Santé n'a pas à le faire deux fois
+             * pour une installation de dix groupes. */
+            $list = $eqLogic->voletList();
+            $volets += count($list);
+            /* Un volet dont l'équipement a disparu de Jeedom reste dans la
+             * configuration du groupe : il échoue à chaque ordre, et le groupe
+             * commande moins de volets qu'il n'en affiche. */
+            foreach ($list as $volet) {
+                if (isset($volet['missing']) && $volet['missing'] == 1) {
+                    $missing++;
+                }
+            }
             if ($eqLogic->isPaused()) {
                 $paused++;
             }
@@ -1672,6 +1973,13 @@ class voletautobe extends eqLogic {
                 'result'  => $volets,
                 'advice'  => ($volets > 0) ? '' : __('Aucun volet choisi : les moments ne feront rien.', __FILE__),
                 'state'   => ($volets > 0),
+            ),
+            array(
+                'test'    => __('Volets introuvables', __FILE__),
+                'result'  => $missing,
+                'advice'  => ($missing == 0) ? ''
+                    : __('Ouvrez le groupe concerné : ils portent l\'étiquette « Équipement supprimé ». Tant qu\'ils y sont, le groupe commande moins de volets qu\'il n\'en affiche.', __FILE__),
+                'state'   => ($missing == 0),
             ),
             array(
                 'test'    => __('Sonde de température', __FILE__),

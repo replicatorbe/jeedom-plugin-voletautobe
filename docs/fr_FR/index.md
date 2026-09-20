@@ -179,6 +179,24 @@ n'est jamais annoncé, c'est qu'il ne se déclenchera jamais : moment désactiv�
 aucun jour coché, position de l'installation manquante, ou façade que le soleil
 n'atteint jamais à cette saison.
 
+**Essayer ce moment** — un bouton, sous chaque moment, qui exécute son action
+sur-le-champ : son « faire », son pourcentage, ses volets. Il commande pour de
+vrai, sans se soucier des conditions — un bouton d'essai qui ne ferait rien
+parce qu'il fait 18 °C serait incompréhensible — **et il rend compte, dans la
+même phrase, de ce que les conditions auraient dit à l'heure prévue** :
+« Fermeture à 30 % envoyée à 4 volets. Au moment venu, ce moment aurait été
+sauté : 18,2 °C, seuil 26 °C. »
+
+C'est cette seconde moitié qui a le plus de valeur. Le premier bout vérifie la
+chaîne complète, du réglage jusqu'au volet qui bouge — ce qu'aucun autre bouton
+ne fait, ceux du groupe se contentant d'ouvrir, de fermer et d'arrêter. Le
+second répond en plein mois de mars, et en une seconde, à la question qu'on ne
+pouvait poser qu'au lendemain matin : *ce réglage-là aurait-il fait quelque
+chose aujourd'hui, et sinon pourquoi ?*
+
+L'essai ne marque pas le moment comme joué : il se jouera quand même, à son
+heure, le jour même. Essayer un moment ne le consomme pas.
+
 ### La protection solaire, et sa fin
 
 Le troisième moment est celui qui justifie à lui seul la sonde de température :
@@ -200,6 +218,12 @@ Le quatrième moment, **Fin de protection**, est son complément obligé : il ro
 les volets quand le soleil quitte la façade. Sans lui, la pièce resterait à 30 %
 jusqu'au soir, longtemps après que le soleil est passé ailleurs. Les deux moments
 se règlent sur la façade du groupe, et la section suivante explique comment.
+
+Ils forment une paire jusque dans leur exécution : la fin de protection ne
+rouvre que les jours où la protection solaire a réellement fermé. Un jour trop
+frais pour qu'elle ferme est un jour où la fin de protection n'a rien à rouvrir,
+et elle se tait. La section qui lui est consacrée dit pourquoi, et dans quel cas
+elle joue malgré tout toute seule.
 
 ## La condition de température
 
@@ -292,7 +316,10 @@ décide.
 
 Sous ces trois champs, le bloc affiche en permanence la position du soleil
 **maintenant** : c'est l'outil qui permet de les remplir sans rien mesurer, et le
-paragraphe suivant en donne le mode d'emploi.
+paragraphe suivant en donne le mode d'emploi. Dès que vous touchez à l'un des
+trois nombres, une seconde phrase s'y ajoute et dit ce que cette façade donne
+réellement sur une année à votre position — c'est l'objet de la section « Le
+plugin vous dit si le soleil atteint votre façade ».
 
 Ces trois nombres sont écrits **une seule fois pour tout le groupe**, et aucun
 moment ne les redemande. Un moment déclenché sur la façade y renvoie ; une
@@ -373,6 +400,43 @@ Si vous préférez raisonner sur le plan de la maison : une façade plein sud
 regarde 180°, une façade sud-ouest 225°, une façade ouest 270°, une façade
 sud-est 135°. Prenez alors le *de* et le *à* de part et d'autre — une façade
 sud-ouest prend le soleil grosso modo de 180° à 270°.
+
+### Le plugin vous dit si le soleil atteint votre façade
+
+Trois nombres parfaitement cohérents à l'écran peuvent décrire une façade que le
+soleil n'atteint jamais, ou qu'il ne quitte jamais. Rien ne le signalait à la
+saisie : le réglage était accepté, l'aperçu des prochaines fois restait vide, et
+l'on mettait des mois à comprendre — quand on comprenait.
+
+Le plugin a pourtant tout ce qu'il faut pour le dire : votre latitude, votre
+longitude, et la course du soleil sur une année. Il la parcourt donc, un jour
+sur cinq, et écrit sous les champs de la façade ce qu'elle donne vraiment. La
+phrase se rafraîchit une demi-seconde après votre dernière frappe, pendant que
+vous réglez, et non des mois plus tard.
+
+Trois réponses sont possibles :
+
+- **« Cette façade est éclairée 340 jours sur 365, jusqu'à 8 h 00 par jour. »**
+  Le cas normal : les trois nombres décrivent un mur que le soleil visite pour
+  de bon, et les deux déclencheurs de façade tomberont.
+- **« Le soleil ne dépasse jamais 310° à votre latitude : l'exposition ne se
+  termine jamais sur l'azimut de fin, mais sur la hauteur minimale ou au
+  coucher. »** Ce n'est pas un défaut, et c'est justement le cas de la façade
+  livrée, qui va jusqu'à 315° : à 50,5° de latitude nord, le soleil ne va pas
+  au-delà de **310,1°**, même au soir du 21 juin. Une façade déclarée jusqu'à
+  340° ne se terminera donc jamais sur son azimut de fin. Mieux vaut le savoir
+  que le découvrir : c'est la hauteur minimale qui fera sortir le soleil de
+  cette façade, et c'est elle qu'il faudra corriger si la fin de protection
+  tombe trop tôt ou trop tard.
+- **« À votre position, le soleil n'éclaire jamais cette façade. Vérifiez les
+  deux azimuts et la hauteur minimale ; le soleil ne monte jamais au-dessus de
+  62,6° ici. »** Là, il y a quelque chose à reprendre : une façade plein nord
+  trop étroite, un *de* et un *à* intervertis, ou une hauteur minimale de 70°
+  sous une latitude où le soleil culmine à 62,6°. Aucun des deux déclencheurs de
+  façade ne tomberait un seul jour de l'année.
+
+Sans position d'installation, le plugin ne calcule rien et le dit : il n'y a pas
+de course du soleil à parcourir tant que Jeedom ne sait pas où vous êtes.
 
 ### Déclencher : les cinq façons de fixer un moment
 
@@ -578,6 +642,39 @@ plugin s'en tenait à l'azimut. Ce qui rouvre les volets, c'est la descente du
 soleil sous la hauteur minimale — ou son coucher, si vous avez mis cette hauteur
 à zéro.
 
+**Elle ne défait que ce que la protection a fait.** C'est la règle la plus
+importante de ce moment, et elle ne va pas de soi, parce qu'elle a été ajoutée
+après coup : son absence se payait trop cher.
+
+Les deux moments étaient indépendants l'un de l'autre. Un jour à 19 °C, la
+protection solaire était sautée — seuil 26 °C, il ne faisait tout simplement pas
+assez chaud — et à 18:03 la fin de protection **ouvrait quand même** les volets.
+S'ils étaient fermés parce que quelqu'un faisait la sieste, ou pour ne pas être
+vu de la rue, l'automatisme défaisait un geste que personne ne lui avait demandé
+de défaire. C'est le pire reproche qu'on puisse faire à un plugin de ce genre,
+et il ne se voit qu'après coup : le soir venu, les volets sont ouverts et rien
+n'explique pourquoi.
+
+Désormais, la fin de protection ne rouvre que si la protection solaire **a
+réellement bougé les volets** le jour même. Pas si elle a été évaluée : si elle
+a envoyé ses ordres. Les jours où elle est sautée — trop frais, soleil absent,
+jour de la semaine non coché —, la fin de protection est sautée aussi, et elle
+le dit dans le journal comme dans la commande **Dernier changement** : « Fin de
+protection sautée : la protection solaire n'a pas eu lieu aujourd'hui ». Le
+moment est marqué joué malgré tout, comme pour les conditions : la décision se
+prend une fois, à l'heure dite, et ne se rattrape pas un quart d'heure plus
+tard.
+
+**L'exception compte autant que la règle : quand la protection solaire est
+désactivée, la fin de protection redevient autonome.** Le couplage existe pour
+ne pas défaire une protection qui n'a pas eu lieu ; là où aucune protection
+n'est configurée, il n'y a rien à ne pas défaire, et « ouvrir en fin
+d'après-midi, quand le soleil quitte la façade » est un réglage légitime en soi.
+C'est celui de qui veut de la lumière dans le salon dès que le mur cesse de
+chauffer, sans jamais rien fermer à midi. Activez la protection solaire et les
+deux moments forment de nouveau une paire ; laissez-la désactivée et la fin de
+protection joue seule, comme le matin et le soir.
+
 Il est livré **sans condition de soleil**, et ce n'est pas un oubli. Au moment où
 le soleil quitte la façade, il n'y est par définition plus : poser la condition
 sur ce moment-là la rendrait fausse à tous les coups, la réouverture serait
@@ -670,6 +767,10 @@ Chaque ligne a sa raison d'être :
 - **Le quart d'heure de la réouverture** laisse au mur le temps de cesser de
   rayonner. Sans ce moment-là, le salon resterait à 30 % jusqu'à la fermeture du
   soir.
+- **La réouverture est attachée à la fermeture.** Un 14 juillet à 19 °C, la
+  protection solaire ne ferme pas — et la fin de protection ne rouvre pas
+  davantage : elle n'a rien à défaire. Si les volets du salon étaient baissés ce
+  jour-là, c'est que quelqu'un l'a voulu, et ils le restent.
 
 ### Sans position d'installation, le soleil est faux
 
@@ -764,12 +865,91 @@ fermer à trois heures du matin encore moins.
 Un moment n'est joué qu'une fois par jour, même si le cron repasse soixante fois
 pendant le rattrapage.
 
+## Le délai entre deux ordres
+
+Un groupe de huit volets, ce sont huit ordres. Envoyés à la file sans attendre,
+ce sont huit trames radio dans la même milliseconde — et en 433 MHz, une ou deux
+se perdent. Un volet ne bouge pas, et **rien ne le signale** : la commande a bien
+été jouée, aucune erreur n'est levée, le journal est propre et le centre de
+messages est vide. C'est la panne la plus désagréable qui soit, parce qu'elle est
+intermittente autant qu'invisible : ce n'est jamais le même volet, et le
+lendemain tout va bien.
+
+Le plugin attend donc **400 millisecondes entre deux volets**, et rien après le
+dernier — attendre après le dernier ordre ne rend service à personne. Le réglage
+est dans la configuration du plugin, de 0 à 5000 millisecondes. Zéro rétablit
+l'ancien comportement, ce qui convient très bien à une installation entièrement
+Zigbee ou Z-Wave, où les ordres sont acquittés ; montez à 800 ou 1000 ms si
+votre passerelle 433 MHz reste capricieuse. Huit volets à 400 ms, cela fait
+2,8 secondes pour tout le groupe : c'est invisible sur des volets qui mettent
+vingt secondes à descendre.
+
+L'attente totale d'un groupe est plafonnée à **30 secondes**. Un groupe de cent
+volets réglé à 500 ms bloquerait le cron cinquante secondes, ce que le cœur de
+Jeedom n'accepte pas ; au-delà du plafond, le délai effectif est réduit d'autant
+et le journal le note en niveau debug — c'est un détail d'exécution, pas un
+événement.
+
+## La page Santé
+
+La page **Santé** de Jeedom répond d'un coup d'œil à « est-ce que tout va
+bien ? ». Le plugin n'y compte que des choses qui ne se voient pas autrement :
+
+| Ligne | Ce qu'elle regarde |
+|---|---|
+| **Position de l'installation** | latitude et longitude renseignées : sans elles, tout ce qui touche au soleil est faux. |
+| **Groupes actifs** | le nombre de groupes. |
+| **Groupes suspendus** | la panne la plus discrète du plugin : tout fonctionne, et rien ne bouge. |
+| **Volets programmés** | le nombre de volets que le plugin commande. |
+| **Sonde de température** | les groupes qui posent une condition de température sans sonde lisible : elle ne filtre plus rien. |
+| **Fenêtre de soleil** | les groupes qui se servent du soleil sans position d'installation. |
+| **Volets introuvables** | les volets dont l'équipement n'existe plus dans Jeedom. |
+
+La dernière ligne est la plus concrète. Un équipement supprimé de Jeedom reste
+dans la configuration du groupe, où il échoue à chaque ordre : tant qu'il y est,
+**le groupe commande moins de volets qu'il n'en affiche**, et c'est précisément
+ce qu'on ne remarque pas, puisque les sept autres, eux, bougent. Ouvrez le
+groupe concerné : ils portent l'étiquette « Équipement supprimé », et il suffit
+de les décocher dans le sélecteur.
+
 ## Questions fréquentes
 
 **Un volet ne bouge plus.** Ouvrez le groupe : un équipement supprimé de Jeedom
 porte l'étiquette « Équipement supprimé », un équipement désactivé porte la
 sienne. Un échec d'ordre produit aussi un message au centre de messages de
-Jeedom.
+Jeedom, et la page Santé compte ces volets sur une ligne « Volets introuvables ».
+
+**Un volet sur huit ne bouge pas, de temps en temps, et le journal ne dit
+rien.** C'est la signature d'une trame radio perdue : huit ordres envoyés dans
+la même milliseconde, en 433 MHz, c'est une ou deux trames qui n'arrivent pas, et
+rien ne le signale puisque la commande a bien été jouée. Le plugin attend 400 ms
+entre deux volets pour cette raison ; si le symptôme persiste, montez ce délai
+dans la configuration du plugin — voir « Le délai entre deux ordres ».
+
+**Il n'a pas fait chaud aujourd'hui : la fin de protection va-t-elle quand même
+ouvrir mes volets ce soir ?** Non. Elle ne rouvre que si la protection solaire a
+réellement fermé le jour même. Un jour à 19 °C, la protection est sautée et la
+fin de protection l'est aussi, avec son motif : « la protection solaire n'a pas
+eu lieu aujourd'hui ». Elle ne défait donc plus des volets que vous aviez baissés
+à la main. Une seule exception : si vous laissez la protection solaire désactivée
+et n'activez que la fin de protection, celle-ci joue seule — « ouvrir quand le
+soleil quitte la façade » est un réglage légitime en soi, et le plugin ne vous en
+prive pas.
+
+**Comment vérifier ma protection solaire en plein mois de mars ?** Avec le
+bouton **Essayer ce moment**, sous chaque moment de l'onglet *Programmation*. Il
+envoie l'action pour de vrai — c'est la seule façon de vérifier toute la chaîne
+jusqu'au volet qui bouge — et il vous dit dans la foulée ce que les conditions
+auraient répondu à l'heure prévue : « Fermeture à 30 % envoyée à 4 volets. Au
+moment venu, ce moment aurait été sauté : 18,2 °C, seuil 26 °C. » L'essai ne
+consomme pas le moment : il se jouera quand même à son heure.
+
+**J'ai déclaré ma façade et aucune prochaine fois n'apparaît.** Lisez la phrase
+que le plugin écrit sous les champs de la façade : elle dit combien de jours par
+an le soleil éclaire vraiment ce mur à votre position. Si elle répond qu'il ne
+l'éclaire jamais, ce sont les trois nombres qu'il faut reprendre — le plus
+souvent un *de* et un *à* intervertis, ou une hauteur minimale plus haute que le
+soleil ne monte chez vous.
 
 **Un volet part dans le mauvais sens.** Ouvrez le sélecteur, dépliez sa ligne
 avec le bouton ⚙ et cochez **inversé**. Le bouton monter de la ligne permet de

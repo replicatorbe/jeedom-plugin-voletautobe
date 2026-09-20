@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.2
+
+- **The end of protection no longer undoes what the protection did not do.** The
+  two moments used to be independent of each other: on a 19 °C day the sun
+  protection was skipped — threshold 26 °C, it was not hot enough — and at 18:03
+  the end of protection opened the shutters all the same. If they were closed
+  because somebody was having a nap, or so as not to be seen from the street, the
+  automation undid a gesture nobody had asked it to undo, and it only showed
+  afterwards. From now on the end of protection only opens again if the sun
+  protection **really moved** the shutters that same day — not if it was merely
+  evaluated. On the days it is skipped, the end of protection is skipped too, and
+  it says so, in the log as in "Last change": "End of protection skipped: the sun
+  protection did not happen today". The moment is marked played all the same: the
+  decision is taken once, at the scheduled time, as it is for the conditions.
+- **The exception matters just as much: when the sun protection is disabled, the
+  end of protection acts on its own.** The coupling exists so as not to undo a
+  protection that never happened; where no protection is configured there is
+  nothing not to undo, and "open late in the afternoon, when the sun leaves the
+  facade" is a legitimate setting in its own right. So it goes on playing every
+  day, like the morning and the evening.
+- **The plugin now says whether the sun reaches your facade.** At 50.5° north the
+  sun never goes beyond 310.1° at sunset: a facade declared up to 340° is
+  perfectly consistent on the screen and will nevertheless never end on its
+  ending azimuth. The plugin walks a year of the sun's courses, one day in five,
+  and writes under the facade fields what it really gives — "This facade is lit
+  340 days out of 365, for up to 8 h 00 a day", or the fitting warning: never
+  left on the ending azimuth, or never lit at all. The sentence refreshes while
+  you are setting things up, instead of letting you find out months later.
+- **A test button per moment.** It runs the moment's action for real — its "do",
+  its percentage, its shutters — paying no attention to the conditions, a test
+  button that did nothing because it is 18 °C being baffling, **and it reports
+  what the conditions would have said**: "Close to 30% sent to 4 shutters. When
+  the time came, this moment would have been skipped: 18.2 °C, threshold 26 °C."
+  Both halves count, the second one above all: it answers, in the middle of
+  March, a question one could only ask the next morning. The test does not mark
+  the moment as played, it will still be played at its own time.
+- **An adjustable delay between two orders, 400 ms by default.** A group of eight
+  shutters means eight frames sent within the same millisecond; on 433 MHz one or
+  two of them get lost, a shutter does not move, and **nothing points it out**
+  since the command was duly played. The delay goes between the shutters and not
+  after the last one, is set from 0 to 5000 ms in the plugin configuration, and
+  the total wait of a group is capped at 30 seconds so as not to block the core's
+  cron.
+- **The Health page counts the missing shutters** — those whose device has been
+  deleted from Jeedom. They fail on every order and feed the message centre, and
+  as long as they are there the group commands fewer shutters than it shows. They
+  carry the "Device deleted" label inside the group.
+
 ## 1.1
 
 - **The facade belongs to the group.** The orientation is declared once and only

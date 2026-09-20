@@ -408,6 +408,53 @@ function voletautobeSyncFacade() {
   for (var s = 0; s < voletautobeSlots.length; s++) {
     voletautobeSyncSlotUi(voletautobeSlots[s])
   }
+  voletautobeRefreshReach()
+}
+
+/* La phrase d'atteignabilité, telle que le serveur l'a écrite.
+
+   Elle vient de là-bas entière, phrase et niveau d'alerte : c'est le même code
+   qui calcule et qui rédige, et les deux langues n'ont qu'un endroit à traduire.
+   Posée en textContent, comme tout ce qui n'est pas écrit dans cette page. */
+function voletautobeShowReach(_result) {
+  var target = document.querySelector('.vabFacadeReach')
+  if (target === null) { return }
+  if (!isset(_result) || !isset(_result.summary)) {
+    target.className = 'help-block vabFacadeReach'
+    target.textContent = ''
+    return
+  }
+  /* Le niveau est traduit en classe ici, et non recopié tel quel : une classe
+     venue d'une réponse serait un nom de classe écrit par autre chose que cette
+     page. */
+  var level = (_result.level === 'danger') ? ' text-danger'
+    : ((_result.level === 'warning') ? ' text-warning' : '')
+  target.className = 'help-block vabFacadeReach' + level
+  target.textContent = _result.summary
+}
+
+/* Demande au serveur ce que cette façade donne sur une année.
+
+   500 ms après la dernière frappe, et non à chaque touche : le calcul
+   échantillonne l'année entière — une trentaine de millisecondes — et « 135 »
+   se tape en trois frappes qui vaudraient trois parcours d'année. Les angles
+   sont ceux de l'écran, pas ceux enregistrés : c'est la façade qu'on est en
+   train de régler qu'il faut juger. */
+var voletautobeReachTimer = null
+function voletautobeRefreshReach() {
+  if (document.querySelector('.vabFacadeReach') === null) { return }
+  if (voletautobeReachTimer !== null) { clearTimeout(voletautobeReachTimer) }
+  voletautobeReachTimer = setTimeout(function () {
+    var facade = voletautobeFacadeValues()
+    voletautobeAjax('facade', {
+      id: voletautobeCurrentId(true) || '',
+      from: facade.from,
+      to: facade.to,
+      elevation: facade.elevation
+    }, function (result) {
+      voletautobeShowReach(result)
+    }, { silent: true })
+  }, 500)
 }
 
 /* ============================================================ SONDES ET GROUPE */
@@ -1369,7 +1416,13 @@ function printEqLogic(_eqLogic) {
     voletautobeRenderVolets()
 
     /* La façade avant les moments : ils la rappellent tous, et la poser après
-       leur ferait afficher un instant celle du groupe précédemment ouvert. */
+       leur ferait afficher un instant celle du groupe précédemment ouvert.
+
+       La phrase d'atteignabilité est effacée d'abord : le coeur ne réinitialise
+       que les .eqLogicAttr, et celle du groupe précédent resterait à l'écran le
+       temps de l'aller-retour — sous une façade qui n'est plus la sienne. Poser
+       la façade la redemande. */
+    voletautobeShowReach(null)
     voletautobeApplyFacade(configuration)
 
     for (var s = 0; s < voletautobeSlots.length; s++) {
@@ -1602,6 +1655,46 @@ voletautobeContainer.addEventListener('click', function (event) {
       jeedomUtils.showAlert({ message: result.summary, level: 'success' })
       voletautobeRefreshStates(8000)
     }, { button: target })
+    return
+  }
+
+  /* L'essai d'un moment. Il commande réellement les volets, comme celui du
+     groupe, et n'a donc de sens que sur un groupe enregistré : c'est la
+     configuration enregistrée qu'il joue, pas ce qui est à l'écran.
+
+     Le compte rendu s'écrit sous le bouton et non dans une bulle : il fait deux
+     phrases — ce qui a été envoyé, ce que les conditions auraient décidé — et
+     une bulle disparaît avant qu'on ait lu la seconde, qui est justement celle
+     pour laquelle on a cliqué. */
+  if (target = event.target.closest('.vabSlotTest')) {
+    var testBlock = target.closest('.vabSlot')
+    if (testBlock === null) { return }
+    var testId = voletautobeCurrentId()
+    if (testId === null) { return }
+    var testReport = testBlock.querySelector('.vabSlotTestResult')
+    if (testReport !== null) {
+      testReport.className = 'help-block vabSlotTestResult'
+      testReport.textContent = '{{Essai en cours…}}'
+    }
+    voletautobeAjax('testSlot', { id: testId, key: testBlock.getAttribute('data-slot') }, function (result) {
+      /* Les volets mettent une vingtaine de secondes à finir leur course :
+         relire tout de suite afficherait la position de départ. */
+      voletautobeRefreshStates(8000)
+      if (testReport === null) { return }
+      /* « Le moment aurait été sauté » n'est pas un échec : c'est le compte
+         rendu qu'on venait chercher. Il se distingue quand même du cas où tout
+         serait passé, parce que c'est là-dessus que l'utilisateur pose l'oeil. */
+      testReport.className = 'help-block vabSlotTestResult '
+        + ((result.errors > 0 || result.would != 1) ? 'text-warning' : 'text-success')
+      testReport.textContent = result.summary
+    }, {
+      button: target,
+      failure: function (message) {
+        if (testReport === null) { return }
+        testReport.className = 'help-block vabSlotTestResult text-danger'
+        testReport.textContent = message
+      }
+    })
     return
   }
 })

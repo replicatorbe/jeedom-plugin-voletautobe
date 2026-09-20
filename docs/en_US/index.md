@@ -174,6 +174,24 @@ very code that will decide the order when the time comes. A moment that is never
 announced will never fire: disabled moment, no weekday ticked, missing
 installation position, or a facade the sun never reaches at this time of year.
 
+**Try this moment** — a button, under each moment, that runs its action there
+and then: its "do", its percentage, its shutters. It commands for real, paying
+no attention to the conditions — a test button that did nothing because it is
+18 °C would be baffling — **and it reports, in the same sentence, what the
+conditions would have said at the scheduled time**: "Close to 30% sent to 4
+shutters. When the time came, this moment would have been skipped: 18.2 °C,
+threshold 26 °C."
+
+It is that second half that is worth the most. The first part checks the whole
+chain, from the setting down to the shutter that moves — which no other button
+does, the group's own ones being content to open, close and stop. The second
+answers, in the middle of March and in one second, the question one could only
+ask the next morning: *would that setting have done anything today, and if not
+why?*
+
+The test does not mark the moment as played: it will still be played, at its
+own time, on that same day. Trying a moment does not use it up.
+
 ### The sun protection, and its end
 
 The third moment is the one that justifies the temperature sensor on its own:
@@ -195,6 +213,11 @@ The fourth moment, **End of protection**, is its necessary counterpart: it opens
 the shutters again when the sun leaves the facade. Without it the room would
 stay at 30% until the evening, long after the sun has moved on. Both moments are
 set on the group's facade, and the next section explains how.
+
+They are a pair down to the way they run: the end of protection only opens again
+on the days the sun protection really closed. A day too cool for it to close is a
+day the end of protection has nothing to open, and it keeps quiet. The section
+devoted to it says why, and in which case it still plays entirely on its own.
 
 ## The temperature condition
 
@@ -284,7 +307,10 @@ facade, leaving it" shows that it is most often the one that decides.
 
 Under those three fields, the block shows the sun's position **right now** at
 all times: that is the tool that lets you fill them in without measuring
-anything, and the next paragraph gives its instructions for use.
+anything, and the next paragraph gives its instructions for use. As soon as you
+touch one of the three numbers, a second sentence joins it and says what that
+facade really gives over a year at your position — that is what the section
+"The plugin tells you whether the sun reaches your facade" is about.
 
 Those three numbers are written **once for the whole group**, and no moment asks
 for them again. A moment triggered on the facade refers to them; a sun condition
@@ -366,6 +392,42 @@ If you would rather reason from the house plan: a due south facade looks at
 180°, a south-west one at 225°, a west one at 270°, a south-east one at 135°.
 Then take the *from* and the *to* on either side — a south-west facade catches
 the sun roughly from 180° to 270°.
+
+### The plugin tells you whether the sun reaches your facade
+
+Three perfectly consistent numbers on the screen can describe a facade the sun
+never reaches, or never leaves. Nothing used to point it out as you typed: the
+setting was accepted, the preview of the next times stayed empty, and it took
+months to work out why — when it was worked out at all.
+
+The plugin, however, has everything it needs to tell you: your latitude, your
+longitude, and the sun's course over a year. So it walks that course, one day in
+five, and writes under the facade fields what it really gives. The sentence
+refreshes half a second after your last keystroke, while you are setting things
+up, and not months later.
+
+Three answers are possible:
+
+- **"This facade is lit 340 days out of 365, for up to 8 h 00 a day."** The
+  normal case: the three numbers describe a wall the sun really does visit, and
+  both facade triggers will fire.
+- **"The sun never goes beyond 310° at your latitude: the exposure never ends on
+  the ending azimuth, but on the minimum elevation or at sunset."** That is no
+  fault, and it is precisely the case of the shipped facade, which runs to 315°:
+  at 50.5° north the sun does not go beyond **310.1°**, not even on the evening
+  of 21 June. A facade declared up to 340° will therefore never end on its
+  ending azimuth. Better to know it than to discover it: it is the minimum
+  elevation that will take the sun out of that facade, and it is the one to
+  correct if the end of protection falls too early or too late.
+- **"At your position the sun never lights this facade. Check both azimuths and
+  the minimum elevation; the sun never climbs above 62.6° here."** There, there
+  is something to put right: a too narrow due north facade, a *from* and a *to*
+  swapped round, or a minimum elevation of 70° at a latitude where the sun peaks
+  at 62.6°. Neither of the two facade triggers would fire on a single day of the
+  year.
+
+With no installation position, the plugin computes nothing and says so: there is
+no course of the sun to walk as long as Jeedom does not know where you are.
 
 ### Triggering: the five ways of timing a moment
 
@@ -561,6 +623,37 @@ goes beyond 310.1°, and this moment would never fire if the plugin stuck to the
 azimuth. What opens the shutters again is the sun dropping below the minimum
 elevation — or setting, if you have taken that elevation down to zero.
 
+**It only undoes what the protection did.** That is this moment's most important
+rule, and it does not go without saying, because it was added afterwards: its
+absence cost too much.
+
+The two moments used to be independent of each other. On a 19 °C day the sun
+protection was skipped — threshold 26 °C, it simply was not hot enough — and at
+18:03 the end of protection **opened the shutters all the same**. If they were
+closed because somebody was having a nap, or so as not to be seen from the
+street, the automation undid a gesture nobody had asked it to undo. That is the
+worst reproach one can make to a plugin of this kind, and it only shows
+afterwards: come the evening the shutters are open, and nothing explains why.
+
+From now on, the end of protection only opens again if the sun protection **has
+really moved the shutters** that same day. Not if it was evaluated: if it sent
+its orders. On the days it is skipped — too cool, no sun, weekday not ticked —
+the end of protection is skipped too, and it says so, in the log as in the
+**Last change** command: "End of protection skipped: the sun protection did not
+happen today". The moment is marked played all the same, as it is for the
+conditions: the decision is taken once, at the scheduled time, and is not caught
+up a quarter of an hour later.
+
+**The exception matters as much as the rule: when the sun protection is
+disabled, the end of protection becomes independent again.** The coupling exists
+so as not to undo a protection that never happened; where no protection is
+configured there is nothing not to undo, and "open late in the afternoon, when
+the sun leaves the facade" is a legitimate setting in its own right. It is the
+setting of someone who wants light in the living room as soon as the wall stops
+heating, without ever closing anything at midday. Enable the sun protection and
+the two moments are a pair again; leave it disabled and the end of protection
+plays on its own, like the morning and the evening.
+
 It ships **with no sun condition**, and that is not an oversight. At the moment
 the sun leaves the facade it is by definition no longer on it: setting the
 condition on that moment would make it false every time, the reopening would be
@@ -651,6 +744,10 @@ Every line has its reason:
 - **The quarter of an hour before reopening** gives the wall time to stop
   radiating. Without that moment, the living room would stay at 30% until the
   evening closing.
+- **The reopening is tied to the closing.** On a 19 °C day in July the sun
+  protection does not close — and the end of protection does not open either: it
+  has nothing to undo. If the living-room shutters were down that day, somebody
+  wanted them down, and down they stay.
 
 ### Without an installation position, the sun is wrong
 
@@ -742,11 +839,88 @@ in the morning even less.
 A moment is played only once a day, even if the cron runs sixty times during the
 catch-up window.
 
+## The delay between two orders
+
+A group of eight shutters means eight orders. Sent one after another with no
+wait, they are eight radio frames within the same millisecond — and on 433 MHz,
+one or two of them get lost. A shutter does not move, and **nothing points it
+out**: the command was duly played, no error is raised, the log is clean and the
+message centre is empty. It is the most unpleasant failure there is, because it
+is as intermittent as it is invisible: it is never the same shutter, and the
+next day all is well.
+
+So the plugin waits **400 milliseconds between two shutters**, and nothing after
+the last one — waiting after the last order serves nobody. The setting is in the
+plugin configuration, from 0 to 5000 milliseconds. Zero gives back the old
+behaviour, which suits an all-Zigbee or all-Z-Wave installation very well, where
+orders are acknowledged; go up to 800 or 1000 ms if your 433 MHz gateway stays
+temperamental. Eight shutters at 400 ms make 2.8 seconds for the whole group:
+that is invisible on shutters that take twenty seconds to come down.
+
+The total wait of a group is capped at **30 seconds**. A group of a hundred
+shutters set to 500 ms would block the cron for fifty seconds, which the Jeedom
+core will not have; beyond the cap the effective delay is reduced accordingly and
+the log notes it at debug level — it is a detail of execution, not an event.
+
+## The Health page
+
+Jeedom's **Health** page answers "is everything all right?" at a glance. The
+plugin only counts there the things that do not show any other way:
+
+| Line | What it looks at |
+|---|---|
+| **Position of the installation** | latitude and longitude set: without them, everything to do with the sun is wrong. |
+| **Active groups** | the number of groups. |
+| **Paused groups** | the plugin's quietest failure: everything works, and nothing moves. |
+| **Scheduled shutters** | the number of shutters the plugin commands. |
+| **Temperature sensor** | the groups that set a temperature condition with no readable sensor: it filters nothing any more. |
+| **Sun window** | the groups that use the sun with no installation position. |
+| **Missing shutters** | the shutters whose device no longer exists in Jeedom. |
+
+The last line is the most concrete one. A device deleted from Jeedom stays in
+the group's configuration, where it fails on every order: as long as it is there,
+**the group commands fewer shutters than it shows**, and that is precisely what
+one does not notice, since the other seven do move. Open the group concerned:
+they carry the "Device deleted" label, and it is enough to untick them in the
+selector.
+
 ## Frequently asked questions
 
 **A shutter no longer moves.** Open the group: a device deleted from Jeedom
 carries a "Device deleted" label, a disabled one carries its own. A failed order
-also produces a message in Jeedom's message centre.
+also produces a message in Jeedom's message centre, and the Health page counts
+those shutters on a "Missing shutters" line.
+
+**One shutter out of eight does not move, now and then, and the log says
+nothing.** That is the signature of a lost radio frame: eight orders sent within
+the same millisecond, on 433 MHz, means one or two frames that never arrive, and
+nothing points it out since the command was duly played. That is why the plugin
+waits 400 ms between two shutters; if the symptom persists, raise that delay in
+the plugin configuration — see "The delay between two orders".
+
+**It was not hot today: will the end of protection still open my shutters this
+evening?** No. It only opens again if the sun protection really closed that same
+day. On a 19 °C day the protection is skipped and so is the end of protection,
+with its reason: "the sun protection did not happen today". So it no longer
+undoes shutters you had lowered by hand. One exception only: if you leave the sun
+protection disabled and enable the end of protection alone, that one plays on its
+own — "open when the sun leaves the facade" is a legitimate setting in its own
+right, and the plugin does not take it away from you.
+
+**How do I check my sun protection in the middle of March?** With the **Try this
+moment** button, under each moment of the *Schedule* tab. It sends the action for
+real — the only way to check the whole chain down to the shutter that moves — and
+it tells you in the same breath what the conditions would have answered at the
+scheduled time: "Close to 30% sent to 4 shutters. When the time came, this moment
+would have been skipped: 18.2 °C, threshold 26 °C." The test does not use the
+moment up: it will still be played at its own time.
+
+**I have declared my facade and no next time shows up.** Read the sentence the
+plugin writes under the facade fields: it says how many days a year the sun
+really lights that wall at your position. If it answers that it never lights it,
+it is the three numbers that need revisiting — most often a *from* and a *to*
+swapped round, or a minimum elevation higher than the sun ever climbs where you
+are.
 
 **A shutter goes the wrong way.** Open the selector, unfold its line with the ⚙
 button and tick **inverted**. The line's up button lets you check right away.

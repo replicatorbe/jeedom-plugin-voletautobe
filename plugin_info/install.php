@@ -184,6 +184,11 @@ function voletautobe_remove() {
         foreach (voletautobe::SLOTS as $key) {
             try {
                 cache::delete('voletautobe::done::' . $eqLogic->getId() . '::' . $key);
+                /* La marque de mouvement va avec l'autre, et pour la même
+                 * raison : oubliée ici, elle ferait croire à une réinstallation
+                 * que la protection solaire a déjà fermé les volets du jour, et
+                 * la fin de protection les rouvrirait sans qu'ils aient bougé. */
+                cache::delete('voletautobe::moved::' . $eqLogic->getId() . '::' . $key);
             } catch (Throwable $e) {
                 log::add('voletautobe', 'debug', __('Nettoyage du cache impossible :', __FILE__) . ' ' . $e->getMessage());
             }

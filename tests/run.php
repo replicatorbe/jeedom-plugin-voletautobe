@@ -871,6 +871,178 @@ verifieVrai('elle s\'ouvre au 135°, sur l\'azimut cette fois',
 verifieVrai('et se referme sur la hauteur, avant le coucher',
     $fenetreEte['out'] < voletautobeSun::sun(mktime(0, 0, 0, 6, 21, 2026), $latMaison, $lonMaison)['sunset'] - 3600);
 
+/*
+ * Ce qu'une façade donne sur une année. C'est le dénombrement qui manquait :
+ * jusqu'ici le plugin savait dire à quelle heure le soleil arrive sur une
+ * façade, mais pas qu'il n'y arrive jamais. Quelqu'un qui déclare une façade
+ * allant jusqu'au 340° à 50,5° de latitude obtient un réglage parfaitement
+ * cohérent à l'écran, et qui ne se comportera jamais comme il l'imagine.
+ *
+ * L'échantillonnage vaut cinq jours, soit 73 points : les nombres ci-dessous
+ * se lisent donc sur 73, pas sur 365.
+ */
+echo "\nCe qu'une façade donne sur une année\n";
+$debutAnnee = mktime(0, 0, 0, 1, 1, 2026);
+
+/* Une façade plein sud — du sud-est au sud-ouest — à Bruxelles : le soleil
+ * l'éclaire tous les jours de l'année, y compris au solstice d'hiver où il
+ * culmine à 15,8°, tout juste au-dessus des 15° de hauteur minimale. */
+$porteeSud = voletautobeSun::facadeReach(array('sun_from' => 135, 'sun_to' => 225), LAT, LON, $debutAnnee);
+verifie('un jour sur cinq, soit 73 points', $porteeSud['sampled'], 73);
+verifie('une façade plein sud est prise tous les jours', $porteeSud['days'], 73);
+/* La plus longue exposition sert à dire « jusqu'à 5 h 56 par jour » : c'est en
+ * secondes, et c'est le maximum, pas une moyenne. */
+verifieVrai('jusqu\'à 5 h 56 par jour au plus fort (21 367 s)',
+    abs($porteeSud['longest'] - 21367) < 120);
+verifieVrai('et c\'est bien une durée, pas un horodatage',
+    $porteeSud['longest'] > 0 && $porteeSud['longest'] < 86400);
+/* Chaque jour éclairé a une arrivée et un départ, et chacun une cause et une
+ * seule : c'est ce qui rend le comptage lisible. Si les sommes ne tombaient
+ * pas juste, un jour serait compté deux fois ou pas du tout, et la phrase
+ * construite dessus mentirait sans qu'on puisse le voir. */
+verifie('chaque arrivée a une cause, et une seule',
+        $porteeSud['in_azimuth'] + $porteeSud['in_sunrise'] + $porteeSud['in_elevation'],
+        $porteeSud['days']);
+verifie('chaque départ aussi',
+        $porteeSud['out_azimuth'] + $porteeSud['out_elevation'] + $porteeSud['out_sunset'],
+        $porteeSud['days']);
+
+/* La hauteur maximale de l'année, le nombre qui permet de dire « le soleil ne
+ * monte jamais au-dessus de 62,6° chez vous ». Elle se recoupe par deux autres
+ * chemins : le transit rendu par date_sun_info(), et la géométrie seule —
+ * 90° − latitude + 23,44° d'inclinaison de l'axe. */
+verifie('le soleil ne monte jamais au-dessus de 62,6° à Bruxelles',
+        $porteeSud['max_elevation'], 62.6);
+verifieVrai('ce que la géométrie seule confirme',
+    abs($porteeSud['max_elevation'] - (90 - LAT + 23.4397)) < 0.05);
+$transitEte = @date_sun_info(strtotime('2026-06-21 12:00'), LAT, LON);
+verifieVrai('et le transit du solstice d\'été aussi',
+    abs($porteeSud['max_elevation']
+        - voletautobeSun::sunPosition($transitEte['transit'], LAT, LON)['elevation']) < 0.05);
+
+/*
+ * Le défaut que ce comptage sert à dire. À la latitude de l'installation, le
+ * soleil ne se couche jamais au-delà du 310,1° : une façade déclarée jusqu'au
+ * 340° est parfaitement acceptée, mais son azimut de fin n'est atteint aucun
+ * jour de l'année. Ce n'est pas une panne — la fenêtre se referme sur la
+ * hauteur — mais l'utilisateur doit l'apprendre autrement qu'en attendant six
+ * mois.
+ */
+$porteeLarge = voletautobeSun::facadeReach(array('sun_from' => 135, 'sun_to' => 340),
+                                           $latMaison, $lonMaison, $debutAnnee);
+verifie('le soleil ne quitte jamais cette façade par le 340°', $porteeLarge['out_azimuth'], 0);
+verifie('il en part toujours par la hauteur', $porteeLarge['out_elevation'], $porteeLarge['days']);
+verifie('jamais au coucher non plus, la hauteur vient avant', $porteeLarge['out_sunset'], 0);
+verifie('et la façade est pourtant éclairée tous les jours', $porteeLarge['days'], 73);
+verifieVrai('le soleil n\'y monte pas au-delà de 62,9°',
+    abs($porteeLarge['max_elevation'] - 62.9) < 0.05);
+/* Huit heures : la même fenêtre que celle mesurée plus haut au solstice d'été
+ * sur la façade livrée par défaut, ce qui est attendu puisque c'est la hauteur
+ * qui la referme dans les deux cas — le 315° comme le 340° sont hors de
+ * portée. */
+verifieVrai('jusqu\'à huit heures par jour (28 788 s)',
+    abs($porteeLarge['longest'] - 28788) < 120);
+
+/*
+ * L'autre façon de ne rien obtenir, et elle ne se voit pas sur l'azimut : une
+ * hauteur minimale que le soleil n'atteint jamais. 70° à Bruxelles, c'est huit
+ * degrés au-dessus de son plus haut passage de l'année.
+ */
+$porteeHaute = voletautobeSun::facadeReach(array('sun_elevation' => 70), LAT, LON, $debutAnnee);
+verifie('une hauteur minimale de 70° ne donne aucun jour', $porteeHaute['days'], 0);
+verifieVrai('et la hauteur maximale dit exactement pourquoi',
+    $porteeHaute['max_elevation'] < 70);
+verifie('aucun jour, donc aucune exposition à annoncer', $porteeHaute['longest'], 0);
+verifie('les points ont bien été échantillonnés malgré tout', $porteeHaute['sampled'], 73);
+verifie('et aucune cause n\'est comptée', $porteeHaute['in_azimuth'] + $porteeHaute['out_elevation'], 0);
+
+/* Une façade plein nord étroite : le soleil se lève au 48,7° au plus au nord,
+ * se couche au 311,3°, et ne passe donc jamais entre 350° et 10°. Le contrôle
+ * vaut même avec la fenêtre descendue sous l'horizon — ce n'est pas la hauteur
+ * qui l'interdit, c'est l'azimut. */
+$porteeNord = voletautobeSun::facadeReach(array('sun_from' => 350, 'sun_to' => 10), LAT, LON, $debutAnnee);
+verifie('une façade plein nord n\'est jamais éclairée', $porteeNord['days'], 0);
+$porteeNordBas = voletautobeSun::facadeReach(array('sun_from' => 350, 'sun_to' => 10, 'sun_elevation' => -10),
+                                             LAT, LON, $debutAnnee);
+verifie('même au ras de l\'horizon', $porteeNordBas['days'], 0);
+
+/*
+ * Les causes se lisent à l'endroit comme à l'envers, et c'est là qu'elles
+ * servent. Une façade plein est n'est prise qu'à la belle saison : le soleil
+ * d'hiver se lève déjà trop au sud. Quand elle est prise, il y arrive toujours
+ * en montant — il est déjà dans la fenêtre d'azimut en se levant — et il en
+ * part toujours par le côté, au 110°, bien avant de descendre.
+ */
+$porteeEst = voletautobeSun::facadeReach(array('sun_from' => 45, 'sun_to' => 110, 'sun_elevation' => 5),
+                                         LAT, LON, $debutAnnee);
+verifieVrai('une façade plein est n\'est prise qu\'à la belle saison',
+    $porteeEst['days'] > 40 && $porteeEst['days'] < 52);
+verifie('le soleil y arrive toujours en montant', $porteeEst['in_elevation'], $porteeEst['days']);
+verifie('et jamais en tournant', $porteeEst['in_azimuth'], 0);
+verifie('il en part toujours par l\'azimut', $porteeEst['out_azimuth'], $porteeEst['days']);
+verifie('et jamais au coucher', $porteeEst['out_sunset'], 0);
+
+/* Le lever et le coucher comme causes : une façade ouverte à tout le ciel et
+ * descendue sous l'horizon est prise dès le lever et quittée au coucher, tous
+ * les jours. C'est le seul réglage où ces deux causes-là l'emportent, et il
+ * faut qu'elles se distinguent des deux autres — sans quoi « le soleil quitte
+ * la façade » serait attribué à l'azimut un jour où il fait simplement nuit. */
+$porteeCiel = voletautobeSun::facadeReach(array('sun_from' => 1, 'sun_to' => 359, 'sun_elevation' => -10),
+                                          LAT, LON, $debutAnnee);
+verifie('tout le ciel : éclairée tous les jours', $porteeCiel['days'], 73);
+verifie('le soleil y arrive en se levant', $porteeCiel['in_sunrise'], $porteeCiel['days']);
+verifie('et la quitte en se couchant', $porteeCiel['out_sunset'], $porteeCiel['days']);
+verifieVrai('la plus longue exposition est alors la plus longue journée',
+    abs($porteeCiel['longest'] - ($ete['sunset'] - $ete['sunrise'])) < 900);
+
+/*
+ * Le pas d'échantillonnage. Cinq jours est un compromis ; à un jour, le compte
+ * devient exact, et il doit alors retomber sur le dénombrement fait plus haut
+ * par un tout autre chemin — occurrence(), moment par moment : la façade
+ * sud-sud-ouest de 200° à 260° n'est prise que 321 jours sur 365.
+ */
+$porteeFine = voletautobeSun::facadeReach(array('sun_from' => 200, 'sun_to' => 260),
+                                          LAT, LON, $debutAnnee, 1);
+verifie('au pas de un jour, 365 points', $porteeFine['sampled'], 365);
+verifie('et la façade sud-sud-ouest y retrouve ses 321 jours', $porteeFine['days'], 321);
+/* Un pas nul ou négatif ferait tourner la boucle sans fin : il est ramené à un
+ * jour, ce qui coûte cher mais rend un résultat, au lieu de bloquer le serveur
+ * web sur une action AJAX. */
+verifie('un pas nul est ramené à un jour',
+        voletautobeSun::facadeReach(array(), LAT, LON, $debutAnnee, 0)['sampled'], 365);
+verifie('un pas plus long que l\'année laisse un seul point',
+        voletautobeSun::facadeReach(array(), LAT, LON, $debutAnnee, 900)['sampled'], 1);
+
+/*
+ * Sans position d'installation, il n'y a rien à compter. Zéro point
+ * échantillonné, et une hauteur maximale inconnue plutôt qu'un zéro : (float)
+ * '' vaut zéro, c'est le golfe de Guinée, et l'appelant annoncerait en toute
+ * confiance la course du soleil sur un point de l'Atlantique.
+ */
+$porteeSansLieu = voletautobeSun::facadeReach(array(), '', '', $debutAnnee);
+verifie('sans position, aucun point échantillonné', $porteeSansLieu['sampled'], 0);
+verifie('aucun jour éclairé non plus', $porteeSansLieu['days'], 0);
+verifieVrai('et la hauteur maximale reste inconnue',
+    $porteeSansLieu['max_elevation'] === null);
+verifieVrai('ce qui se distingue d\'une façade inatteignable, où elle est connue',
+    $porteeHaute['max_elevation'] !== null);
+
+/*
+ * Le Svalbard, et le piège qu'il tend. En été le soleil ne s'y couche pas :
+ * sun() ne rend ni lever ni coucher, et une hauteur maximale lue au milieu de
+ * ces deux bornes sauterait précisément les jours les plus hauts de l'année.
+ * On annoncerait 22° là où le soleil monte à 35° — un nombre faux, pas une
+ * absence, et personne ne pourrait s'en apercevoir depuis l'interface.
+ */
+verifieVrai('au Svalbard, le soleil monte à 35,3° malgré le jour polaire',
+    abs(voletautobeSun::facadeReach(array(), 78.2, 15.6, $debutAnnee)['max_elevation'] - 35.3) < 0.1);
+verifieVrai('ce que la géométrie confirme là aussi',
+    abs(voletautobeSun::dayMaxElevation(mktime(0, 0, 0, 6, 21, 2026), 78.2, 15.6)
+        - (90 - 78.2 + 23.4397)) < 0.1);
+verifieVrai('et le cas ordinaire passe par le milieu du jour, au millième près',
+    abs(voletautobeSun::dayMaxElevation(mktime(0, 0, 0, 6, 21, 2026), LAT, LON)
+        - voletautobeSun::sunPosition($transitEte['transit'], LAT, LON)['elevation']) < 0.001);
+
 /* ----------------------------------------------------------------- 12 ---
  * La condition de soleil, et les noms de direction. C'est le pendant de la
  * condition de température : le moment est joué, mais seulement si le soleil

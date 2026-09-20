@@ -25,6 +25,15 @@ require_once __DIR__ . '/../core/class/voletautobe.class.php';
 				<span class="help-block" style="margin:0;">{{Minutes pendant lesquelles un moment manqué est encore joué — box éteinte, redémarrage, cron en retard. Passé ce délai il est abandonné : ouvrir les volets du matin à midi ne rend service à personne. 15 minutes conviennent dans la quasi-totalité des cas.}}</span>
 			</div>
 		</div>
+		<div class="form-group">
+			<label class="col-md-4 control-label">{{Délai entre deux volets}}</label>
+			<div class="col-md-2">
+				<input type="number" min="0" max="5000" class="configKey form-control" data-l1key="order_delay" placeholder="400">
+			</div>
+			<div class="col-md-5">
+				<span class="help-block" style="margin:0;">{{Millisecondes d'attente entre deux ordres d'un même groupe. Les passerelles radio — le 433 MHz en particulier — perdent les trames envoyées coup sur coup : le volet ne bouge pas, et rien ne le signale, puisque la commande a bien été jouée. C'est la panne la plus difficile à voir du plugin, et elle se corrige en laissant respirer la passerelle. 400 ms conviennent dans la plupart des cas ; 0 envoie tout d'un coup, ce qui ne se justifie que sur une installation entièrement filaire. L'attente totale d'un groupe est plafonnée à 30 secondes, pour ne pas retenir le cron.}}</span>
+			</div>
+		</div>
 	</fieldset>
 	<fieldset>
 		<legend><i class="fas fa-thermometer-half"></i> {{Température}}</legend>

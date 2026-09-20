@@ -846,6 +846,224 @@ class voletautobeSun {
     }
 
     /*
+     * La hauteur maximale que le soleil atteint dans la journée, en degrés, ou
+     * null si le calcul n'aboutit pas.
+     *
+     * C'est le nombre qui permet de dire à quelqu'un « le soleil ne monte
+     * jamais au-dessus de 62,6° chez vous », et donc que sa hauteur minimale de
+     * 70° ne se satisfera aucun jour de l'année. Autant dire qu'il doit être
+     * juste, y compris là où la journée ne ressemble pas à une journée.
+     *
+     * Le cas ordinaire est gratuit : la hauteur culmine au midi solaire, et le
+     * milieu du lever et du coucher tombe dessus. Ce milieu n'est pas le midi
+     * solaire à la seconde près — la déclinaison bouge d'un jour à l'autre, ce
+     * qui décale les deux bornes de quelques secondes chacune — mais la hauteur
+     * y est à son maximum, donc sa dérivée y est nulle : l'écart sur le
+     * résultat se compte en millièmes de degré, très en deçà du dixième auquel
+     * facadeReach() arrondit.
+     *
+     * Le cas polaire, lui, n'a ni lever ni coucher, et c'est le piège : se
+     * contenter du cas ordinaire ferait sauter les jours de soleil de minuit,
+     * c'est-à-dire précisément les plus hauts de l'année. Au Svalbard, la
+     * hauteur maximale annoncée tomberait à 22° au lieu de 35° — un nombre
+     * faux, pas une absence, et l'utilisateur lirait « le soleil ne monte
+     * jamais au-dessus de 22° » un jour où il est à 35°. On balaie donc les
+     * vingt-quatre heures, d'heure en heure, puis de minute en minute autour du
+     * meilleur point. La hauteur n'a qu'un maximum par jour, le balayage ne peut
+     * pas se tromper de bosse, et il ne coûte que les jours où la journée n'a
+     * pas de bornes — jamais aux latitudes habitées par les utilisateurs du
+     * plugin.
+     */
+    public static function dayMaxElevation($_dayTimestamp, $_latitude, $_longitude) {
+        $sun = self::sun($_dayTimestamp, $_latitude, $_longitude);
+        if ($sun['sunrise'] !== null && $sun['sunset'] !== null && $sun['sunset'] > $sun['sunrise']) {
+            $top = self::sunPosition((int) floor(($sun['sunrise'] + $sun['sunset']) / 2), $_latitude, $_longitude);
+            return $top['elevation'];
+        }
+
+        $midnight = mktime(0, 0, 0, (int) date('n', $_dayTimestamp), (int) date('j', $_dayTimestamp), (int) date('Y', $_dayTimestamp));
+        if ($midnight === false) {
+            return null;
+        }
+        $best      = null;
+        $bestValue = null;
+        foreach (array(3600, 60) as $step) {
+            /* Le premier passage couvre la journée entière ; le second n'affine
+             * qu'autour du point trouvé, une heure de part et d'autre. */
+            $from = ($best === null) ? $midnight : $best - 3600;
+            $to   = ($best === null) ? $midnight + 86400 : $best + 3600;
+            for ($time = $from; $time <= $to; $time += $step) {
+                $position = self::sunPosition($time, $_latitude, $_longitude);
+                if ($position['elevation'] === null) {
+                    continue;
+                }
+                if ($bestValue === null || $position['elevation'] > $bestValue) {
+                    $bestValue = $position['elevation'];
+                    $best      = $time;
+                }
+            }
+            if ($best === null) {
+                return null;
+            }
+        }
+        return $bestValue;
+    }
+
+    /*
+     * Ce que cette façade donne sur une année, à cette position.
+     *
+     * Rend un dénombrement : combien de jours échantillonnés le soleil éclaire
+     * la façade, par quoi il y arrive, par quoi il en part, jusqu'où il monte,
+     * et combien de temps dure la plus longue exposition.
+     *
+     * À quoi cela sert. À 50,5° de latitude nord le soleil ne dépasse jamais
+     * le 310,1° au coucher ni les 62,6° de hauteur : une façade déclarée
+     * jusqu'au 340°, ou une hauteur minimale de 70°, donne un réglage
+     * parfaitement cohérent à l'écran et qui ne se comportera jamais comme
+     * l'utilisateur l'imagine — au mieux la fenêtre ne se referme que sur la
+     * hauteur ou au coucher, au pire elle n'existe aucun jour de l'année et la
+     * protection solaire ne part jamais. Le plugin sait tout ce qu'il faut pour
+     * le dire ; il ne lui manquait que de le compter. C'est exactement le
+     * défaut qui s'est produit avec la façade livrée par défaut, découvert
+     * après coup et seulement parce qu'on l'a mesuré.
+     *
+     * $_step : pas d'échantillonnage en jours, 5 par défaut, soit 73 points sur
+     * l'année. C'est un compromis assumé, pas un calcul exact : un jour sur
+     * cinq suffit à dire « éclairée toute l'année », « jamais » ou « seulement
+     * la belle saison », et un jour d'écart sur une frontière de saison ne
+     * change rien à la phrase que l'utilisateur lira. En échange, le coût
+     * tient : un facadeWindow() vaut 0,44 ms mesurées, donc une trentaine de
+     * millisecondes pour les 73 points — ce qui interdit d'appeler cette
+     * méthode à chaque minute de cron, mais convient très bien à une action
+     * AJAX déclenchée quand l'utilisateur règle sa façade. Un appelant qui veut
+     * le compte exact passe $_step = 1 et paie les deux secondes.
+     *
+     * Les nombres rendus se lisent donc en proportion de `sampled`, jamais en
+     * jours d'une année réelle : `days` vaut 73 sur 73, et c'est à l'appelant
+     * de le traduire en « 365 jours sur 365 » s'il veut une phrase.
+     */
+    public static function facadeReach($_slot, $_latitude, $_longitude, $_now = null, $_step = 5) {
+        $slot  = self::cleanSlot($_slot);
+        $reach = array(
+            'sampled'       => 0,
+            'days'          => 0,
+            'in_azimuth'    => 0,
+            'in_sunrise'    => 0,
+            'in_elevation'  => 0,
+            'out_azimuth'   => 0,
+            'out_elevation' => 0,
+            'out_sunset'    => 0,
+            'max_elevation' => null,
+            'longest'       => 0,
+        );
+        /* Sans position d'installation, il n'y a rien à compter : (float) ''
+         * vaut zéro, c'est le golfe de Guinée, et l'appelant afficherait en
+         * toute confiance la course du soleil sur un point de l'Atlantique.
+         * Zéro jour échantillonné dit « on ne sait pas », et se distingue d'un
+         * « le soleil n'éclaire jamais cette façade » par ce seul compte. */
+        if ($_latitude === null || $_longitude === null || $_latitude === '' || $_longitude === '') {
+            return $reach;
+        }
+        $now  = ($_now === null) ? time() : (int) $_now;
+        /* Un pas nul ou négatif ferait tourner la boucle sans fin ; au-delà de
+         * l'année, il ne reste qu'un point. */
+        $step = max(1, min(365, (int) $_step));
+
+        for ($day = 0; $day < 365; $day += $step) {
+            $base = strtotime('+' . $day . ' day', $now);
+            if ($base === false) {
+                continue;
+            }
+            $reach['sampled']++;
+            $sun = self::sun($base, $_latitude, $_longitude);
+
+            $top = self::dayMaxElevation($base, $_latitude, $_longitude);
+            if ($top !== null && ($reach['max_elevation'] === null || $top > $reach['max_elevation'])) {
+                $reach['max_elevation'] = $top;
+            }
+
+            $window = self::facadeWindow($slot, $base, $_latitude, $_longitude);
+            if ($window['in'] === null || $window['out'] === null) {
+                continue;
+            }
+            $reach['days']++;
+            if (($window['out'] - $window['in']) > $reach['longest']) {
+                $reach['longest'] = $window['out'] - $window['in'];
+            }
+
+            /*
+             * À quoi attribuer l'arrivée et le départ.
+             *
+             * facadeWindow() ne rend qu'un horodatage ; la cause, elle, se
+             * relit sur place. Le raisonnement est le même aux deux bouts :
+             * « être sur la façade » est la conjonction de deux conditions —
+             * l'azimut dans la fenêtre, la hauteur au-dessus du seuil — bornée
+             * par le jour lui-même. On regarde donc, à l'instant rendu,
+             * laquelle des deux vient de basculer.
+             *
+             * L'arrivée d'abord. Si elle tombe à l'heure du lever, c'est le
+             * lever qui l'a faite : le soleil était déjà dans la fenêtre et
+             * assez haut en se levant, il n'a fait qu'apparaître.
+             * facadeWindow() rend alors l'horodatage du lever à la seconde,
+             * sans dichotomie, d'où la comparaison exacte. Sinon, la seconde qui
+             * précède l'arrivée voit un soleil qui n'est pas encore sur la
+             * façade : la condition qui lui manque là est la cause.
+             *
+             * Le départ ensuite, en miroir. Si l'horodatage est celui du
+             * coucher, c'est le coucher qui l'a fait, et facadeWindow() le rend
+             * lui aussi tel quel. Sinon, à l'instant du départ — le premier où
+             * le soleil n'est plus sur la façade — la condition qui manque est
+             * la cause.
+             *
+             * Ce qui rend ce comptage utile est qu'il se lit à l'envers :
+             * out_azimuth à zéro sur 73 jours ne dit pas que l'azimut de fin
+             * est mal réglé, il dit que le soleil ne l'atteint jamais à cette
+             * latitude — la fenêtre se referme toujours sur la hauteur ou au
+             * coucher. C'est ce raisonnement, et pas le nombre, qu'il faudra
+             * se rappeler devant un comptage surprenant.
+             *
+             * Reste un cas où l'attribution tranche arbitrairement : quand les
+             * deux conditions basculent dans la même seconde — un soleil qui
+             * entre dans la fenêtre à l'instant même où il passe la hauteur.
+             * L'azimut l'emporte alors, parce qu'il est testé le premier. Le
+             * cas est rare, il ne fausse qu'un jour sur soixante-treize, et
+             * aucune des phrases construites à partir de ces nombres n'en
+             * dépend.
+             */
+            if ($window['in'] <= $sun['sunrise']) {
+                $reach['in_sunrise']++;
+            } else {
+                $before = self::sunPosition($window['in'] - 1, $_latitude, $_longitude);
+                if ($before['azimuth'] === null
+                    || !self::azimuthInWindow($before['azimuth'], $slot['sun_from'], $slot['sun_to'])) {
+                    $reach['in_azimuth']++;
+                } else {
+                    $reach['in_elevation']++;
+                }
+            }
+
+            if ($window['out'] >= $sun['sunset']) {
+                $reach['out_sunset']++;
+            } else {
+                $gone = self::sunPosition($window['out'], $_latitude, $_longitude);
+                if ($gone['azimuth'] === null
+                    || !self::azimuthInWindow($gone['azimuth'], $slot['sun_from'], $slot['sun_to'])) {
+                    $reach['out_azimuth']++;
+                } else {
+                    $reach['out_elevation']++;
+                }
+            }
+        }
+
+        /* Le dixième de degré : au-delà, on afficherait une précision que ni
+         * l'échantillonnage ni la réfraction ne garantissent. */
+        if ($reach['max_elevation'] !== null) {
+            $reach['max_elevation'] = round($reach['max_elevation'], 1);
+        }
+        return $reach;
+    }
+
+    /*
      * L'horodatage du moment pour un jour donné, ou null s'il n'y a rien ce
      * jour-là : jour de semaine décoché, ou soleil qui ne se couche pas.
      *

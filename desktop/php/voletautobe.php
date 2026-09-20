@@ -206,6 +206,23 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 				<div class="vabPreview well well-sm" style="margin:0;padding:8px 12px;">—</div>
 			</div>
 		</div>
+
+		<!--
+		     L'essai du moment, juste sous l'aperçu : c'est là que l'utilisateur
+		     se demande « et concrètement, ça donne quoi ? », et l'aperçu ne
+		     répond qu'à la moitié de la question — il dit quand, pas ce que ça
+		     fera dans la pièce. Le bouton joue l'action du moment, ses
+		     conditions comprises dans le compte rendu, sans attendre le
+		     lendemain.
+		-->
+		<div class="form-group">
+			<label class="col-sm-3 control-label">{{Essai}}</label>
+			<div class="col-sm-9">
+				<a class="btn btn-default btn-sm vabSlotTest"><i class="fas fa-vial"></i> {{Jouer ce moment maintenant}}</a>
+				<span class="help-block vabSlotTestResult" style="margin:6px 0 0 0;"></span>
+				<span class="help-block" style="margin:6px 0 0 0;">{{Ce bouton commande réellement les volets enregistrés, comme l'essai de l'onglet « Volets » : sauvegardez d'abord si vous venez de modifier ce moment. Il envoie l'action sans se soucier des conditions — un essai qui ne ferait rien parce qu'il fait 18 °C serait incompréhensible — et dit ensuite ce que les conditions auraient décidé au moment venu. Le moment se jouera quand même à son heure : l'essai ne le marque pas comme joué.}}</span>
+			</div>
+		</div>
 	</fieldset>
 	<?php
 }
@@ -434,6 +451,23 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 										<input type="number" min="-10" max="90" step="5" class="eqLogicAttr form-control roundedLeft vabFacadeElevation" data-l1key="configuration" data-l2key="facade_elevation" placeholder="15">
 										<span class="input-group-addon roundedRight">°</span>
 									</div>
+								</div>
+							</div>
+							<!--
+							     Ce que cette façade donne sur une année, en une phrase.
+							     À 50,5° de latitude nord le soleil ne dépasse jamais 310°
+							     au coucher : une façade déclarée jusqu'à 340° est
+							     parfaitement cohérente à l'écran et ne se comportera
+							     jamais comme l'utilisateur l'imagine. Le plugin sait tout
+							     ce qu'il faut pour le lui dire, c'est ici qu'il le dit —
+							     sous les champs qu'il faudrait corriger. La phrase vient
+							     du serveur : elle est calculée par le même code que les
+							     déclenchements.
+							-->
+							<div class="form-group">
+								<label class="col-sm-4 control-label">&nbsp;</label>
+								<div class="col-sm-8">
+									<span class="help-block vabFacadeReach" style="margin:0;"></span>
 								</div>
 							</div>
 							<div class="form-group">
