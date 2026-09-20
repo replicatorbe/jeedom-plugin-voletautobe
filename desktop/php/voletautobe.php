@@ -11,11 +11,11 @@ $voletautobeDays = array(1 => '{{Lun}}', 2 => '{{Mar}}', 3 => '{{Mer}}', 4 => '{
                          5 => '{{Ven}}', 6 => '{{Sam}}', 7 => '{{Dim}}');
 
 /*
- * Le bloc d'un moment, écrit une fois et posé trois fois : le matin, la
- * protection solaire et le soir se règlent exactement de la même façon, seuls
- * leur nom, leur icône et leur texte d'aide diffèrent. Trois formulaires
+ * Le bloc d'un moment, écrit une fois et posé quatre fois : le matin, la
+ * protection solaire, sa fin et le soir se règlent exactement de la même façon,
+ * seuls leur nom, leur icône et leur texte d'aide diffèrent. Quatre formulaires
  * jumeaux écrits à la main divergeraient au premier ajout de champ, et c'est
- * toujours le troisième qu'on oublie de mettre à jour.
+ * toujours le dernier qu'on oublie de mettre à jour.
  */
 function voletautobeSlot($_key, $_title, $_icon, $_help) {
 	global $voletautobeDays;
@@ -57,6 +57,13 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 					<option value="fixed">{{À une heure fixe}}</option>
 					<option value="sunrise">{{Par rapport au lever du soleil}}</option>
 					<option value="sunset">{{Par rapport au coucher du soleil}}</option>
+					<!-- Les deux moments de la façade ne demandent aucun angle ici : ils
+					     se règlent avec l'orientation du groupe, déclarée une seule fois
+					     dans l'onglet « Volets ». Un azimut réglable par moment
+					     laisserait écrire l'orientation de la maison à quatre endroits,
+					     sans qu'aucun ne fasse foi. -->
+					<option value="facade_in">{{Quand le soleil arrive sur la façade}}</option>
+					<option value="facade_out">{{Quand le soleil quitte la façade}}</option>
 				</select>
 			</div>
 			<div class="col-sm-5 vabFixed">
@@ -151,6 +158,42 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 		</div>
 
 		<div class="form-group">
+			<label class="col-sm-3 control-label">
+				{{Soleil}}
+				<sup><i class="fas fa-question-circle" title="{{L'autre condition qui peut empêcher ce moment, et celle qui rend la protection solaire juste : ne rien faire tant que le soleil n'est pas sur la façade du groupe. Elle sert surtout aux moments déclenchés à heure fixe — « à 13:00, seulement si le soleil est sur la façade ». Sur un moment déjà déclenché par la façade, elle ne vérifie plus que la hauteur, ce qui est dit juste en dessous. Le plugin sait où est le soleil, pas s'il brille : un jour couvert, le moment est joué quand même — comme il l'est si la position de l'installation n'est pas renseignée.}}"></i></sup>
+			</label>
+			<div class="col-sm-9">
+				<select class="eqLogicAttr form-control vabSunMode vabPreviewTrigger" data-l1key="configuration" data-l2key="<?php echo $_key; ?>" data-l3key="sun_mode">
+					<option value="none">{{Aucune}}</option>
+					<option value="window">{{Seulement quand le soleil est sur la façade}}</option>
+				</select>
+			</div>
+		</div>
+
+		<!--
+		     La condition n'a plus d'angles à elle : l'orientation appartient au
+		     groupe et se déclare une seule fois, dans l'onglet « Volets ». Des
+		     azimuts réglables ici les feraient écrire quatre fois, sans qu'on
+		     sache lequel fait foi — et posés sur un moment déclenché par la
+		     façade, ils étaient vrais par construction et ne filtraient rien.
+
+		     Les deux lignes sont donc du texte, écrit par le JS : ce que vaut la
+		     façade du groupe, et — quand le déclencheur est la façade — ce que
+		     cette condition vérifie encore réellement. C'est la question que
+		     l'utilisateur se posait devant cet écran, elle reçoit sa réponse
+		     à l'endroit exact où elle se pose.
+		-->
+		<div class="vabSunBlock">
+			<div class="form-group">
+				<label class="col-sm-3 control-label">&nbsp;</label>
+				<div class="col-sm-9">
+					<span class="help-block vabSunRecall" style="margin:0;"></span>
+					<span class="help-block vabSunNote text-warning" style="margin:4px 0 0 0;"></span>
+				</div>
+			</div>
+		</div>
+
+		<div class="form-group">
 			<label class="col-sm-3 control-label">&nbsp;</label>
 			<div class="col-sm-9">
 				<span class="help-block" style="margin:0;"><?php echo $_help; ?></span>
@@ -191,7 +234,7 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 			echo '<ol style="margin:5px 0 0 0;padding-left:20px;">';
 			echo '<li>{{Cliquez sur « Ajouter un groupe » et donnez-lui un nom, par exemple « Chambres » ou « Façade sud ».}}</li>';
 			echo '<li>{{Cliquez sur « Choisir les volets » : le plugin va les chercher dans votre installation, vous n\'avez qu\'à cocher. Les boutons de chaque ligne font monter ou descendre le volet, c\'est la seule façon de savoir lequel est « Module 3 ».}}</li>';
-			echo '<li>{{Onglet « Programmation » : réglez le matin et le soir, à heure fixe ou par rapport au soleil, et la protection solaire si vos étés sont chauds.}}</li>';
+			echo '<li>{{Onglet « Programmation » : réglez le matin et le soir, à heure fixe ou par rapport au soleil. Si vos étés sont chauds, réglez aussi la protection solaire et sa fin, qui ferment quand le soleil arrive sur la façade et rouvrent quand il la quitte — l\'orientation de la façade se déclare une fois dans l\'onglet « Volets ».}}</li>';
 			echo '<li>{{Enregistrez. Rien d\'autre à faire, aucun scénario à écrire.}}</li>';
 			echo '</ol>';
 			echo '</div>';
@@ -314,7 +357,7 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 							<div class="form-group">
 								<label class="col-sm-4 control-label">&nbsp;</label>
 								<div class="col-sm-8">
-									<span class="help-block" style="margin:0;">{{Suspendre arrête les trois moments sans désactiver le groupe : les boutons continuent de fonctionner, le groupe reste sur le tableau de bord, et les commandes « Suspendre » et « Reprendre » se pilotent en scénario — un mode vacances, des volets ouverts pour les peintres.}}</span>
+									<span class="help-block" style="margin:0;">{{Suspendre arrête les quatre moments sans désactiver le groupe : les boutons continuent de fonctionner, le groupe reste sur le tableau de bord, et les commandes « Suspendre » et « Reprendre » se pilotent en scénario — un mode vacances, des volets ouverts pour les peintres.}}</span>
 								</div>
 							</div>
 						</fieldset>
@@ -338,6 +381,77 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 								<label class="col-sm-4 control-label">&nbsp;</label>
 								<div class="col-sm-8">
 									<span class="help-block" style="margin:0;">{{Une maison a une température extérieure, pas huit : laissez « Celle du plugin » et réglez-la une fois dans la configuration. Un groupe qui mérite sa propre sonde — la chambre au nord, une véranda — choisit la sienne ici. Sans sonde lisible, les conditions de température de l'onglet Programmation sont sans effet : les moments sont joués quand même.}}</span>
+								</div>
+							</div>
+						</fieldset>
+						<!--
+						     La façade appartient au groupe, pas à ses moments : un groupe
+						     rassemble les volets d'une pièce ou d'une façade, et son
+						     orientation est la même pour tous ses moments. Déclarée une
+						     seule fois ici, elle sert à la fois aux déclencheurs « quand le
+						     soleil arrive / quitte la façade » et à la condition de soleil
+						     de l'onglet « Programmation ». Écrite moment par moment, elle se
+						     serait contredite d'un bloc à l'autre sans que rien ne le dise.
+						-->
+						<fieldset>
+							<legend><i class="fas fa-compass"></i> {{Façade}}</legend>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">
+									{{Le soleil y arrive à}}
+									<sup><i class="fas fa-question-circle" title="{{L'azimut où le soleil apparaît sur cette façade : la direction d'où il vient, comptée depuis le nord, 90° à l'est, 180° plein sud, 270° à l'ouest. Une façade plein sud voit le soleil de 135° (sud-est) à 315° (nord-ouest). Pas de boussole ? Ouvrez cette page au moment précis où le soleil arrive sur la façade et recopiez ici l'azimut affiché plus bas ; recommencez le soir, quand il la quitte, pour l'autre valeur.}}"></i></sup>
+								</label>
+								<div class="col-sm-8">
+									<div class="input-group">
+										<input type="number" min="0" max="360" step="5" class="eqLogicAttr form-control roundedLeft vabFacadeFrom" data-l1key="configuration" data-l2key="facade_from" placeholder="135">
+										<span class="input-group-addon roundedRight">°</span>
+									</div>
+									<!-- Le nom de la direction, tenu à jour par le JS à chaque
+									     frappe : « 200 » ne se vérifie pas, « sud-sud-ouest » se
+									     vérifie d'un coup d'oeil par la fenêtre. -->
+									<span class="help-block vabFacadeFromName" style="margin:2px 0 0 0;"></span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">
+									{{Il la quitte à}}
+									<sup><i class="fas fa-question-circle" title="{{L'azimut où le soleil abandonne cette façade. La plage peut passer par le nord : « de 300° à 30° » est une façade nord-ouest–nord-est, et elle contient bien 350°. Deux valeurs identiques font une façade vide : le soleil n'y serait jamais, et la condition de soleil empêcherait le moment tous les jours.}}"></i></sup>
+								</label>
+								<div class="col-sm-8">
+									<div class="input-group">
+										<input type="number" min="0" max="360" step="5" class="eqLogicAttr form-control roundedLeft vabFacadeTo" data-l1key="configuration" data-l2key="facade_to" placeholder="315">
+										<span class="input-group-addon roundedRight">°</span>
+									</div>
+									<span class="help-block vabFacadeToName" style="margin:2px 0 0 0;"></span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">
+									{{Hauteur minimale}}
+									<sup><i class="fas fa-question-circle" title="{{La hauteur du soleil au-dessus de l'horizon en dessous de laquelle il ne chauffe pas cette façade. Sans elle, un jour de décembre où le soleil rase à 8° déclencherait une protection solaire qui n'a aucun sens : la direction est bonne, mais le soleil passe derrière les maisons d'en face. 15° est un bon point de départ ; montez la valeur si un arbre ou un mur vous protège déjà en début de journée.}}"></i></sup>
+								</label>
+								<div class="col-sm-8">
+									<div class="input-group">
+										<input type="number" min="-10" max="90" step="5" class="eqLogicAttr form-control roundedLeft vabFacadeElevation" data-l1key="configuration" data-l2key="facade_elevation" placeholder="15">
+										<span class="input-group-addon roundedRight">°</span>
+									</div>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Soleil maintenant}}</label>
+								<div class="col-sm-8">
+									<!-- Où est le soleil en ce moment, juste sous les deux
+									     azimuts : c'est l'outil de réglage de la façade. On
+									     regarde par la fenêtre, on voit le soleil arriver dessus,
+									     on lit l'azimut ici et on le recopie au-dessus — sans
+									     boussole, sans sortir, et sans attendre une saison pour
+									     vérifier. -->
+									<span id="span_voletautobeSun" class="label label-default" title="{{La position du soleil maintenant, calculée à partir de la position de votre installation. Ouvrez cette page au moment où le soleil arrive sur la façade : l'azimut affiché ici est celui à recopier au-dessus.}}">—</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">&nbsp;</label>
+								<div class="col-sm-8">
+									<span class="help-block" style="margin:0;">{{Cette orientation sert deux fois dans l'onglet « Programmation » : elle déclenche les moments réglés sur « quand le soleil arrive sur la façade » ou « quand il la quitte », et elle fixe la fenêtre de la condition de soleil. Un groupe par façade est donc la bonne façon de découper la maison. Les aperçus, eux, sont calculés sur la façade enregistrée : sauvegardez pour les voir suivre.}}</span>
 								</div>
 							</div>
 						</fieldset>
@@ -373,6 +487,14 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 			<!-- ========================================= PROGRAMMATION ========================================= -->
 			<div role="tabpanel" class="tab-pane" id="scheduletab">
 				<br>
+				<!--
+				     Les quatre moments dans l'ordre de la journée, deux par ligne :
+				     matin et protection solaire, puis fin de protection et soir. Les
+				     deux moments de la protection sont ainsi voisins à l'écran, ce
+				     qu'ils sont dans la journée — l'un ferme, l'autre rouvre, et les
+				     régler l'un sans l'autre laisse la pièce dans le noir jusqu'au
+				     soir.
+				-->
 				<div class="col-lg-6">
 					<form class="form-horizontal">
 						<?php
@@ -385,7 +507,16 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 					<form class="form-horizontal">
 						<?php
 						voletautobeSlot('heat', '{{Protection solaire}}', 'fas fa-temperature-high',
-							'{{Fermer aux trois quarts pendant les heures chaudes, les jours chauds seulement, et ne rien faire le reste de l\'année : c\'est le moment qui justifie à lui seul la sonde de température. Sans condition, il fermerait aussi les après-midi d\'avril à 14 °C.}}');
+							'{{Fermer aux trois quarts quand le soleil arrive sur la façade, les jours chauds seulement, et ne rien faire le reste de l\'année : c\'est le moment qui justifie à lui seul la sonde de température. Fermer à heure fixe convenait en juin, laissait le soleil taper une heure de trop en août et ne correspondait à rien en octobre ; la façade, elle, suit les saisons toute seule.}}');
+						?>
+					</form>
+				</div>
+				<div class="clearfix"></div>
+				<div class="col-lg-6">
+					<form class="form-horizontal">
+						<?php
+						voletautobeSlot('shade_end', '{{Fin de protection}}', 'fas fa-cloud-sun',
+							'{{Rouvrir quand le soleil quitte la façade. Sans ce moment, les volets baissés à midi restent baissés jusqu\'au soir et la pièce reste sombre pour rien, alors qu\'il n\'y a plus rien à protéger. Il ne demande aucune condition de soleil : à l\'instant où il tombe, le soleil vient justement de quitter la façade.}}');
 						?>
 					</form>
 				</div>

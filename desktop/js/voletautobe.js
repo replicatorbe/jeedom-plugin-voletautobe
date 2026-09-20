@@ -16,10 +16,10 @@
 
 /* ================================================================== OUTILS */
 
-/* Les trois moments, dans l'ordre de la journée. La liste est ici une fois pour
+/* Les quatre moments, dans l'ordre de la journée. La liste est ici une fois pour
    toutes : ajouter un moment sans la mettre à jour donnerait un bloc qui
    s'affiche, se règle, et n'est jamais enregistré. */
-var voletautobeSlots = ['morning', 'heat', 'evening']
+var voletautobeSlots = ['morning', 'heat', 'shade_end', 'evening']
 
 /* Les volets du groupe ouvert. C'est la source de vérité de l'onglet Volets :
    l'affichage en découle, et saveEqLogic la recopie dans la configuration. */
@@ -148,6 +148,40 @@ function voletautobeApplyInvert(_value, _invert) {
   if (value < 0) { value = 0 }
   if (value > 100) { value = 100 }
   return (_invert == 1) ? (100 - value) : value
+}
+
+/* Les seize secteurs de la rose des vents, de 22,5° chacun, à partir du nord.
+   La table est la jumelle de voletautobeSun::$_compass : deux tables qui
+   divergeraient feraient dire deux choses différentes au même réglage selon
+   qu'on le lit dans le champ ou dans l'aperçu, et c'est le nom, pas le nombre,
+   que l'utilisateur va vérifier. */
+var voletautobeCompassNames = [
+  '{{nord}}', '{{nord-nord-est}}', '{{nord-est}}', '{{est-nord-est}}',
+  '{{est}}', '{{est-sud-est}}', '{{sud-est}}', '{{sud-sud-est}}',
+  '{{sud}}', '{{sud-sud-ouest}}', '{{sud-ouest}}', '{{ouest-sud-ouest}}',
+  '{{ouest}}', '{{ouest-nord-ouest}}', '{{nord-ouest}}', '{{nord-nord-ouest}}'
+]
+
+/* Le nom de direction d'un azimut. Le calcul est fait ici et non demandé au
+   serveur : le nom doit suivre la frappe, et un aller-retour par azimut tapé
+   afficherait « sud » sous un champ déjà passé à 280. */
+function voletautobeCompass(_azimuth) {
+  var azimuth = parseFloat(_azimuth)
+  if (isNaN(azimuth)) { return '' }
+  azimuth = ((azimuth % 360) + 360) % 360
+  return voletautobeCompassNames[Math.round(azimuth / 22.5) % 16]
+}
+
+/* Un angle en degrés tel qu'il est dans un champ, ramené dans ses bornes.
+   Un champ vidé reprend le défaut plutôt que de partir vide : le serveur
+   lirait « » comme 0, c'est-à-dire plein nord et 0° de hauteur — un réglage
+   que personne n'a demandé et qui ne déclencherait plus rien. */
+function voletautobeDegrees(_value, _default, _min, _max) {
+  var value = parseFloat(String(_value).replace(',', '.'))
+  if (isNaN(value)) { return _default }
+  if (value < _min) { value = _min }
+  if (value > _max) { value = _max }
+  return value
 }
 
 /* ========================================================= VOLETS DU GROUPE */
@@ -293,6 +327,91 @@ function voletautobeShowTemperature(_value, _name) {
     + ((isset(_name) && _name !== '') ? ' — ' + _name : '')
 }
 
+/* Où est le soleil maintenant, juste sous les deux azimuts de la façade. C'est
+   l'outil de réglage du bloc : on regarde par la fenêtre, on voit le soleil
+   arriver sur la façade, on lit l'azimut ici et on le recopie au-dessus — sans
+   boussole, sans sortir et sans attendre une saison pour vérifier. */
+function voletautobeShowSun(_azimuth, _elevation) {
+  var target = document.getElementById('span_voletautobeSun')
+  if (target === null) { return }
+  if (!isset(_azimuth) || _azimuth === '' || !isset(_elevation) || _elevation === '') {
+    /* Sans position d'installation, le serveur ne rend rien plutôt que la
+       position du golfe de Guinée : une direction plausible et fausse serait
+       recopiée telle quelle dans la façade. */
+    target.className = 'label label-warning'
+    target.textContent = '{{Position du soleil inconnue}}'
+    return
+  }
+  var azimuth = Math.round(parseFloat(_azimuth))
+  var elevation = Math.round(parseFloat(_elevation))
+  /* Sous l'horizon, l'azimut reste parfaitement défini et parfaitement hors
+     sujet : l'annoncer en degrés de hauteur ferait régler une façade sur la
+     position de minuit. */
+  target.className = (elevation < 0) ? 'label label-default' : 'label label-info'
+  target.textContent = '{{Soleil au}} ' + azimuth + '° (' + voletautobeCompass(azimuth) + '), '
+    + ((elevation < 0) ? '{{sous l\'horizon}}' : elevation + '° {{de hauteur}}')
+}
+
+/* ============================================================ FAÇADE DU GROUPE */
+
+/* La façade d'un groupe neuf. Une maison plein sud voit le soleil de 135°
+   (sud-est) à 315° (nord-ouest), et sous 15° de hauteur il ne chauffe plus
+   grand-chose. Ces valeurs sont les jumelles de celles de voletautobe::facade() :
+   deux points de départ qui divergeraient feraient afficher une orientation que
+   le serveur n'applique pas. */
+var voletautobeFacadeDefaults = { from: 135, to: 315, elevation: 15 }
+
+/* Les trois champs de la façade. Ce sont des .eqLogicAttr — le coeur les pose et
+   les relit tout seul — mais il ne sait ni écrire « sud-est » à côté, ni les
+   remplir sur un groupe enregistré avant que la façade n'existe. */
+var voletautobeFacadeFields = '.vabFacadeFrom, .vabFacadeTo, .vabFacadeElevation'
+
+/* La façade telle qu'elle est à l'écran, bornée. Elle est lue dans le formulaire
+   et non dans la réponse du serveur : les rappels des moments doivent suivre la
+   frappe, sinon on croit que la façade qu'on vient de taper n'a pas été prise. */
+function voletautobeFacadeValues() {
+  var from = document.querySelector('.vabFacadeFrom')
+  var to = document.querySelector('.vabFacadeTo')
+  var elevation = document.querySelector('.vabFacadeElevation')
+  return {
+    from: voletautobeDegrees((from === null) ? '' : from.value, voletautobeFacadeDefaults.from, 0, 360),
+    to: voletautobeDegrees((to === null) ? '' : to.value, voletautobeFacadeDefaults.to, 0, 360),
+    elevation: voletautobeDegrees((elevation === null) ? '' : elevation.value, voletautobeFacadeDefaults.elevation, -10, 90)
+  }
+}
+
+/* Pose la façade du groupe ouvert. Le coeur a déjà rempli les trois champs, mais
+   un groupe enregistré avant que la façade n'existe n'a aucune de ces clés : les
+   champs resteraient vides, le serveur lirait « » comme 0 — plein nord et 0° de
+   hauteur — et la protection solaire se déclencherait au milieu de la nuit. */
+function voletautobeApplyFacade(_configuration) {
+  var configuration = _configuration || {}
+  var facade = {
+    '.vabFacadeFrom': voletautobeDegrees(configuration.facade_from, voletautobeFacadeDefaults.from, 0, 360),
+    '.vabFacadeTo': voletautobeDegrees(configuration.facade_to, voletautobeFacadeDefaults.to, 0, 360),
+    '.vabFacadeElevation': voletautobeDegrees(configuration.facade_elevation, voletautobeFacadeDefaults.elevation, -10, 90)
+  }
+  for (var selector in facade) {
+    var field = document.querySelector(selector)
+    if (field !== null) { field.value = facade[selector] }
+  }
+  voletautobeSyncFacade()
+}
+
+/* La façade a changé : son nom de direction s'écrit à côté, et les quatre
+   moments la rappellent. Un moment qui afficherait encore l'ancienne orientation
+   ferait croire que la saisie n'a pas porté, et l'utilisateur la retaperait là
+   où elle n'existe plus. */
+function voletautobeSyncFacade() {
+  voletautobeShowCompass(document, '.vabFacadeFrom', '.vabFacadeFromName')
+  voletautobeShowCompass(document, '.vabFacadeTo', '.vabFacadeToName')
+  for (var s = 0; s < voletautobeSlots.length; s++) {
+    voletautobeSyncSlotUi(voletautobeSlots[s])
+  }
+}
+
+/* ============================================================ SONDES ET GROUPE */
+
 /* Remplit la liste des sondes et y repose le choix du groupe. Le coeur a déjà
    tenté de le faire, sur une liste qui ne contenait alors que « Celle du
    plugin » : sans cette seconde passe, la sonde choisie retomberait sur le
@@ -366,6 +485,9 @@ function voletautobeLoadGroup(_id) {
     voletautobeShowTemperature(
       isset(result.temperature) ? result.temperature : null,
       isset(result.temperatureName) ? result.temperatureName : '')
+    voletautobeShowSun(
+      isset(result.azimuth) ? result.azimuth : null,
+      isset(result.elevation) ? result.elevation : null)
   }, { silent: true })
 }
 
@@ -931,27 +1053,48 @@ function voletautobePickerValidate() {
 /* =========================================================== PROGRAMMATION */
 
 /* Ce que le plugin poserait de toute façon à l'enregistrement d'un groupe neuf.
-   Sans cela, le formulaire montrerait trois moments vides, « Ouvrir » aussi
+   Sans cela, le formulaire montrerait quatre moments vides, « Ouvrir » aussi
    bien le soir que le matin, et un aperçu qui annonce que rien ne se
    déclenchera jamais : l'écran mentirait dès la création. Rien n'est exécuté
-   tant que le groupe n'a pas de volet. */
+   tant que le groupe n'a pas de volet.
+
+   La protection solaire part sur la façade et non sur une heure fixe : c'est
+   tout l'objet du réglage, 13 h convenait en juin et ne correspondait à rien en
+   octobre. Sa condition de soleil est posée, puisqu'elle n'a plus d'angles à
+   elle — elle suit la façade du groupe, et sur un déclencheur de façade elle ne
+   vérifie plus que la hauteur.
+
+   Sa fin, elle, n'en pose aucune : à l'instant où le soleil quitte la façade, il
+   n'y est par définition plus. Une fenêtre de soleil en condition ferait sauter
+   la réouverture tous les jours, et les volets resteraient baissés jusqu'au
+   soir — exactement ce que ce moment existe pour éviter. */
 var voletautobeDefaults = {
   morning: {
     enable: 1, action: 'up', position: 100, mode: 'sunrise', time: '07:00', offset: 0,
     random: 0, not_before: '07:00', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'none', temp_value: ''
+    temp_mode: 'none', temp_value: '', sun_mode: 'none'
   },
   heat: {
-    enable: 0, action: 'position', position: 30, mode: 'fixed', time: '13:00', offset: 0,
+    enable: 0, action: 'position', position: 30, mode: 'facade_in', time: '13:00', offset: 0,
     random: 0, not_before: '', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'min', temp_value: '26'
+    temp_mode: 'min', temp_value: '26', sun_mode: 'none'
+  },
+  shade_end: {
+    enable: 0, action: 'up', position: 100, mode: 'facade_out', time: '17:00', offset: 0,
+    random: 0, not_before: '', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
+    temp_mode: 'none', temp_value: '', sun_mode: 'none'
   },
   evening: {
     enable: 1, action: 'down', position: 0, mode: 'sunset', time: '21:00', offset: 0,
     random: 0, not_before: '18:00', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'none', temp_value: ''
+    temp_mode: 'none', temp_value: '', sun_mode: 'none'
   }
 }
+
+/* Les champs d'un moment que le coeur ne voit pas changer, parce qu'ils sont
+   posés et relus à la main. La liste est ici une fois pour toutes : un champ
+   ajouté sans elle se perdrait à l'enregistrement, sans le moindre message. */
+var voletautobeManualFields = '.vabDay, .vabOffsetValue, .vabOffsetWay, .vabPositionValue'
 
 function voletautobeSlotElement(_key) {
   return document.querySelector('.vabSlot[data-slot="' + _key + '"]')
@@ -968,11 +1111,16 @@ function voletautobeSyncSlotUi(_key) {
 
   var mode = block.querySelector('.vabMode').value
   var isFixed = (mode === 'fixed')
+  var isFacade = (mode === 'facade_in' || mode === 'facade_out')
   block.querySelector('.vabFixed').style.display = isFixed ? '' : 'none'
   block.querySelector('.vabSun').style.display = isFixed ? 'none' : ''
-  block.querySelector('.vabEventName').textContent = (mode === 'sunrise')
-    ? '{{le lever du soleil}}'
-    : '{{le coucher du soleil}}'
+  /* Le décalage se dit du même souffle que l'événement : « 20 min après [que le
+     soleil arrive sur la façade] » se relit tout seul, et ce décalage a un sens —
+     c'est le temps que la façade mette à chauffer. */
+  block.querySelector('.vabEventName').textContent = (mode === 'facade_in')
+    ? '{{que le soleil arrive sur la façade}}'
+    : ((mode === 'facade_out') ? '{{que le soleil quitte la façade}}'
+      : ((mode === 'sunrise') ? '{{le lever du soleil}}' : '{{le coucher du soleil}}'))
 
   var isPosition = (block.querySelector('.vabAction').value === 'position')
   var positionBlocks = block.querySelectorAll('.vabPositionBlock')
@@ -982,6 +1130,46 @@ function voletautobeSyncSlotUi(_key) {
 
   var hasCondition = (block.querySelector('.vabTempMode').value !== 'none')
   block.querySelector('.vabTempBlock').style.display = hasCondition ? '' : 'none'
+
+  var hasSun = (block.querySelector('.vabSunMode').value !== 'none')
+  block.querySelector('.vabSunBlock').style.display = hasSun ? '' : 'none'
+
+  /* La condition parle de « la façade », encore faut-il dire laquelle : elle se
+     règle dans l'onglet « Volets », et sans ce rappel on la chercherait ici. */
+  var facade = voletautobeFacadeValues()
+  var recall = block.querySelector('.vabSunRecall')
+  if (recall !== null) {
+    recall.textContent = '{{Façade du groupe : de}} '
+      + facade.from + '° (' + voletautobeCompass(facade.from) + ') {{à}} '
+      + facade.to + '° (' + voletautobeCompass(facade.to) + '), '
+      + '{{au-dessus de}} ' + facade.elevation + '°. '
+      + '{{Elle se règle une fois pour toutes dans l\'onglet « Volets ».}}'
+  }
+
+  /* Le doublon, dit à l'écran, à l'endroit précis où l'utilisateur s'est posé
+     la question.
+
+     « Quand le soleil arrive sur la façade » ne tombe que lorsque le soleil y
+     est vraiment — dans la fenêtre d'azimut ET au-dessus de la hauteur
+     minimale. La condition n'a donc plus rien à écarter : ni la direction, ni
+     la hauteur. La laisser s'évaluer aurait même été nuisible, le déclencheur
+     posant le soleil pile sur sa borne, là où un arrondi flottant décide à
+     pile ou face. */
+  var note = block.querySelector('.vabSunNote')
+  if (note !== null) {
+    note.style.display = isFacade ? '' : 'none'
+    note.textContent = '{{Ce moment est déjà déclenché par la façade : il ne tombe que lorsque le soleil y est, direction et hauteur comprises. La condition n\'a donc rien à filtrer de plus, et n\'est pas évaluée. Elle sert avec les autres déclencheurs — une heure fixe, le lever ou le coucher.}}'
+  }
+}
+
+/* Écrit le nom de direction à côté d'un champ d'azimut. « 200 » ne se vérifie
+   pas ; « sud-sud-ouest » se vérifie d'un coup d'oeil par la fenêtre, et c'est
+   ainsi que l'utilisateur pense sa maison. */
+function voletautobeShowCompass(_block, _field, _target) {
+  var field = _block.querySelector(_field)
+  var target = _block.querySelector(_target)
+  if (field === null || target === null) { return }
+  target.textContent = voletautobeCompass(field.value)
 }
 
 /* Relève un moment tel qu'il est à l'écran. Les jours, le décalage signé et le
@@ -1022,7 +1210,13 @@ function voletautobeReadSlot(_key) {
     /* La valeur part telle qu'elle a été tapée, virgule comprise : c'est le
        serveur qui normalise, et convertir ici ferait deux règles pour un même
        « 5,5 ». */
-    temp_value: block.querySelector('.vabTempValue').value
+    temp_value: block.querySelector('.vabTempValue').value,
+    /* Le moment ne porte plus d'angles : « sur la façade » veut dire celle du
+       groupe, et c'est le serveur qui l'y recopie avant tout calcul. Les relire
+       ici, dans des champs qui n'existent plus, écrirait l'orientation de la
+       maison à cinq endroits — quatre moments et le groupe — sans qu'aucun ne
+       fasse foi. */
+    sun_mode: block.querySelector('.vabSunMode').value
   }
 }
 
@@ -1045,6 +1239,7 @@ function voletautobeApplySlot(_key, _slot) {
     block.querySelector('.eqLogicAttr[data-l3key="not_after"]').value = slot.not_after
     block.querySelector('.vabTempMode').value = slot.temp_mode
     block.querySelector('.vabTempValue').value = slot.temp_value
+    block.querySelector('.vabSunMode').value = slot.sun_mode
   }
 
   var offset = parseInt(slot.offset, 10)
@@ -1055,6 +1250,23 @@ function voletautobeApplySlot(_key, _slot) {
   var position = parseInt(slot.position, 10)
   if (isNaN(position)) { position = voletautobeDefaults[_key].position }
   block.querySelector('.vabPositionValue').value = position
+
+  /* Un groupe enregistré avant que le plugin ne sache où est le soleil n'a pas
+     de clé sun_mode : le coeur laisse alors la liste sur une valeur vide, que
+     l'enregistrement suivant renverrait telle quelle. */
+  var sunMode = block.querySelector('.vabSunMode')
+  if (sunMode.value !== 'none' && sunMode.value !== 'window') {
+    sunMode.value = voletautobeDefaults[_key].sun_mode
+  }
+
+  /* Même filet sur le déclencheur. Un moment resté en mode « azimut », le temps
+     que la mise à jour du plugin le traduise, désigne une option qui n'existe
+     plus : la liste retombe alors sur une valeur vide, et l'enregistrement
+     suivant écrirait un mode que personne ne sait jouer. */
+  var mode = block.querySelector('.vabMode')
+  if (mode.selectedIndex < 0 || mode.value === '') {
+    mode.value = voletautobeDefaults[_key].mode
+  }
 
   /* Un groupe neuf n'a pas de jours enregistrés : tous cochés, parce qu'une
      programmation qui ne s'applique aucun jour ne sert à rien et que l'erreur
@@ -1101,13 +1313,19 @@ function voletautobeShowPreview(_key, _preview) {
       '{{Aucune sonde lisible : cette condition de température est sans effet, le moment sera joué quand même.}}'))
   }
 
-  /* Les heures ci-dessus sont plausibles et fausses tant que la position de
-     l'installation n'est pas renseignée : le dire ici est le seul moment où
-     l'utilisateur regarde. */
-  if (_preview.needsSun == 1 && _preview.noLocation == 1) {
+  /* Les heures et les positions de soleil ci-dessus sont plausibles et fausses
+     tant que la position de l'installation n'est pas renseignée : le dire ici
+     est le seul moment où l'utilisateur regarde.
+
+     noLocation porte déjà le « et ça compte pour ce moment » du serveur : il ne
+     vaut 1 que si le moment suit le soleil — lever, coucher, azimut atteint ou
+     fenêtre de soleil. Le retester ici sur needsSun laisserait passer les deux
+     réglages ajoutés en dernier, qui sont justement ceux qui ne veulent rien
+     dire sans position. */
+  if (_preview.noLocation == 1) {
     target.appendChild(document.createElement('br'))
     target.appendChild(voletautobeText('small', 'text-danger',
-      '{{Position de l\'installation absente : ces heures de soleil sont fausses. Réglages → Système → Configuration → Général.}}'))
+      '{{Position de l\'installation absente : les heures de soleil et la position du soleil sont fausses. Réglages → Système → Configuration → Général.}}'))
   }
 }
 
@@ -1115,7 +1333,7 @@ function voletautobeShowPreview(_key, _preview) {
    Le calcul est fait là-bas : c'est le même code qui décidera de l'ordre au
    moment venu, et deux implémentations divergeraient — c'est l'interface qu'on
    croirait. */
-var voletautobePreviewTimer = { morning: null, heat: null, evening: null }
+var voletautobePreviewTimer = { morning: null, heat: null, shade_end: null, evening: null }
 function voletautobeRefreshPreview(_key) {
   /* hasOwnProperty et non isset : la valeur de départ est null, et un test de
      présence sur la valeur refuserait le tout premier aperçu de chaque moment. */
@@ -1150,6 +1368,10 @@ function printEqLogic(_eqLogic) {
     }
     voletautobeRenderVolets()
 
+    /* La façade avant les moments : ils la rappellent tous, et la poser après
+       leur ferait afficher un instant celle du groupe précédemment ouvert. */
+    voletautobeApplyFacade(configuration)
+
     for (var s = 0; s < voletautobeSlots.length; s++) {
       var key = voletautobeSlots[s]
       voletautobeApplySlot(key, isset(configuration[key]) ? configuration[key] : null)
@@ -1160,6 +1382,7 @@ function printEqLogic(_eqLogic) {
        la mesure garderaient l'état du groupe précédemment ouvert. */
     voletautobeShowPaused(false, '')
     voletautobeShowTemperature(null, '')
+    voletautobeShowSun(null, null)
     voletautobeLoadSensors(isset(configuration.temperature_cmd) ? configuration.temperature_cmd : '')
   } finally {
     voletautobeRendering = false
@@ -1259,16 +1482,24 @@ function addCmdToTable(_cmd) {
 var voletautobeContainer = document.getElementById('div_pageContainer') || document.body
 
 voletautobeContainer.addEventListener('change', function (event) {
+  /* La façade n'est pas dans un bloc de moment — elle est dans l'onglet
+     « Volets » — mais elle change ce que les quatre blocs racontent. */
+  if (event.target.closest(voletautobeFacadeFields)) {
+    voletautobeSyncFacade()
+    voletautobeMarkModified()
+    return
+  }
+
   var block = event.target.closest('.vabSlot')
   if (block === null) { return }
-  if (event.target.closest('.vabMode') || event.target.closest('.vabAction') || event.target.closest('.vabTempMode')) {
+  if (event.target.closest('.vabMode') || event.target.closest('.vabAction')
+      || event.target.closest('.vabTempMode') || event.target.closest('.vabSunMode')) {
     voletautobeSyncSlotUi(block.getAttribute('data-slot'))
   }
   /* Les jours, le décalage et le pourcentage ne sont pas des .eqLogicAttr : le
      coeur ne les voit pas changer, et sans cela on quitterait la page en
      perdant un réglage tout juste posé, sans le moindre avertissement. */
-  if (event.target.closest('.vabDay') || event.target.closest('.vabOffsetValue')
-      || event.target.closest('.vabOffsetWay') || event.target.closest('.vabPositionValue')) {
+  if (event.target.closest(voletautobeManualFields)) {
     voletautobeMarkModified()
   }
   if (event.target.closest('.vabPreviewTrigger')) {
@@ -1277,12 +1508,23 @@ voletautobeContainer.addEventListener('change', function (event) {
 })
 
 voletautobeContainer.addEventListener('input', function (event) {
+  /* Le nom de direction et les rappels des moments suivent la frappe : attendre
+     la sortie du champ afficherait « sud » à côté d'un azimut déjà passé à 280.
+     Les aperçus, eux, ne bougent pas — le serveur les calcule sur la façade
+     enregistrée, et les redemander ici annoncerait l'ancienne orientation comme
+     si la nouvelle n'avait pas porté. */
+  if (event.target.closest(voletautobeFacadeFields)) {
+    voletautobeSyncFacade()
+    voletautobeMarkModified()
+    return
+  }
+
   var block = event.target.closest('.vabSlot')
   if (block === null || !event.target.closest('.vabPreviewTrigger')) { return }
   /* Une frappe dans le décalage ou le pourcentage n'émet « change » qu'à la
      sortie du champ : taper puis cliquer ailleurs dans la page perdrait la
      saisie sans avertissement. */
-  if (event.target.closest('.vabOffsetValue') || event.target.closest('.vabPositionValue')) {
+  if (event.target.closest(voletautobeManualFields)) {
     voletautobeMarkModified()
   }
   voletautobeRefreshPreview(block.getAttribute('data-slot'))

@@ -346,6 +346,825 @@ verifie('aucun jour sans ouverture', $manquants, 0);
 verifie('jamais après 08:00', $tropTard, 0);
 
 /* ----------------------------------------------------------------- 10 ---
+ * La position du soleil dans le ciel. C'est ce qui remplace l'heure fixe de la
+ * protection solaire : une façade sud-ouest prend le soleil quand son azimut
+ * passe 200°, pas à 13 h.
+ *
+ * Deux des repères se retrouvent de tête, et c'est ce qui les rend précieux :
+ * au midi solaire d'un solstice, le soleil culmine à 90° − latitude ± 23,44°,
+ * l'inclinaison de l'axe de la Terre. 90 − 50,85 + 23,44 = 62,6° le 21 juin,
+ * et 15,7° le 21 décembre. Une erreur de déclinaison, de longitude ou de
+ * fuseau se verrait immédiatement ici. */
+echo "\nPosition du soleil\n";
+
+/* Le midi solaire vient de date_sun_info(), c'est-à-dire du coeur de PHP :
+ * lui opposer notre azimut, c'est confronter deux calculs qui n'ont rien en
+ * commun — et c'est le contrôle croisé qui attrape une heure locale employée
+ * là où il fallait de l'UTC, décalage qu'aucune erreur ne signalerait. */
+$infoEte   = date_sun_info(mktime(12, 0, 0, 6, 21, 2026), LAT, LON);
+$infoHiver = date_sun_info(mktime(12, 0, 0, 12, 21, 2026), LAT, LON);
+$midiEte   = $infoEte['transit'];
+$midiHiver = $infoHiver['transit'];
+
+$hautEte   = voletautobeSun::sunPosition($midiEte, LAT, LON);
+$hautHiver = voletautobeSun::sunPosition($midiHiver, LAT, LON);
+verifieVrai('21 juin, le soleil culmine à 62,6°', abs($hautEte['elevation'] - 62.6) < 1);
+verifieVrai('21 décembre, il ne monte qu\'à 15,7°', abs($hautHiver['elevation'] - 15.7) < 1);
+verifieVrai('et au midi solaire il est plein sud, en juin', abs($hautEte['azimuth'] - 180) < 1);
+verifieVrai('comme en décembre', abs($hautHiver['azimuth'] - 180) < 1);
+verifie('« plein sud » se dit aussi en toutes lettres',
+        voletautobeSun::compassName($hautEte['azimuth']), 'sud');
+
+/*
+ * L'azimut du lever, confronté à la trigonométrie sphérique seule :
+ *
+ *     cos A = (sin déclinaison − sin h · sin latitude) / (cos h · cos latitude)
+ *
+ * où h = −0,833° est la hauteur du centre du soleil à l'instant où
+ * date_sun_info() déclare le lever — le demi-diamètre du disque plus la
+ * réfraction. Ce chemin-là ne passe ni par l'équation du temps, ni par l'angle
+ * horaire, ni par la longitude : il ne partage rien avec le nôtre, et l'écart
+ * entre les deux est la mesure la plus honnête dont on dispose hors ligne.
+ *
+ * Elle donne 49,6° en juin et 127,8° en décembre pour Bruxelles ; le contrat
+ * annonçait « ≈ 48° » et « ≈ 129° », arrondis à un degré et demi près — c'est
+ * la formule qui fait foi, et les deux calculs du plugin s'accordent avec elle
+ * à trois centièmes de degré.
+ */
+function azimutLeverTheorique($_declinaison, $_hauteur = -0.833) {
+    $cosinus = (sin(deg2rad($_declinaison)) - sin(deg2rad($_hauteur)) * sin(deg2rad(LAT)))
+             / (cos(deg2rad($_hauteur)) * cos(deg2rad(LAT)));
+    return rad2deg(acos(max(-1.0, min(1.0, $cosinus))));
+}
+
+$leverEte     = voletautobeSun::sunPosition($ete['sunrise'], LAT, LON);
+$coucherEte   = voletautobeSun::sunPosition($ete['sunset'], LAT, LON);
+$leverHiver   = voletautobeSun::sunPosition($hiver['sunrise'], LAT, LON);
+$coucherHiver = voletautobeSun::sunPosition($hiver['sunset'], LAT, LON);
+
+/* À l'heure du lever rendue par sun(), notre hauteur doit être nulle. C'est le
+ * contrôle croisé le plus précieux du fichier : deux calculs indépendants —
+ * date_sun_info() du coeur de PHP et le nôtre — doivent tomber sur le même
+ * instant, et une erreur de fuseau les écarterait d'une heure, soit une
+ * dizaine de degrés de hauteur. */
+verifieVrai('21 juin, hauteur nulle à l\'heure du lever', abs($leverEte['elevation']) < 1.5);
+verifieVrai('21 juin, hauteur nulle à l\'heure du coucher', abs($coucherEte['elevation']) < 1.5);
+verifieVrai('21 décembre, hauteur nulle au lever', abs($leverHiver['elevation']) < 1.5);
+verifieVrai('21 décembre, hauteur nulle au coucher', abs($coucherHiver['elevation']) < 1.5);
+
+verifieVrai('21 juin, lever au 49,6°',
+    abs($leverEte['azimuth'] - azimutLeverTheorique(23.44)) < 0.3);
+verifieVrai('21 juin, coucher au 310,4°, symétrique du lever',
+    abs($coucherEte['azimuth'] - (360 - azimutLeverTheorique(23.44))) < 0.3);
+verifieVrai('21 décembre, lever au 127,8°',
+    abs($leverHiver['azimuth'] - azimutLeverTheorique(-23.44)) < 0.3);
+verifieVrai('21 décembre, coucher au 232,2°',
+    abs($coucherHiver['azimuth'] - (360 - azimutLeverTheorique(-23.44))) < 0.3);
+verifie('le soleil de juin se lève au nord-est',
+        voletautobeSun::compassName($leverEte['azimuth']), 'nord-est');
+verifie('celui de décembre au sud-est',
+        voletautobeSun::compassName($leverHiver['azimuth']), 'sud-est');
+
+/* La nuit, la hauteur est négative. Zéro par défaut ferait passer minuit pour
+ * un lever de soleil, et une condition « au moins 0° de hauteur » serait
+ * remplie toute la nuit. */
+verifieVrai('à minuit le soleil est sous l\'horizon',
+    voletautobeSun::sunPosition(mktime(0, 0, 0, 6, 21, 2026), LAT, LON)['elevation'] < 0);
+verifieVrai('et très loin dessous en décembre',
+    voletautobeSun::sunPosition(mktime(0, 0, 0, 12, 21, 2026), LAT, LON)['elevation'] < -50);
+
+/* La réfraction relève le soleil rasant d'un demi-degré, soit tout le diamètre
+ * du disque : sans elle, la hauteur rendue ne serait ni celle des éphémérides
+ * ni celle qu'on voit par la fenêtre. */
+verifieVrai('la réfraction relève le soleil à l\'horizon',
+    abs(voletautobeSun::refraction(0) - 0.48) < 0.05);
+verifie('et ne corrige rien au zénith', voletautobeSun::refraction(90), 0.0);
+
+/* Sous nos latitudes, le soleil tourne dans le même sens toute la journée :
+ * l'azimut croît du lever au coucher, sans jamais reculer. Un recul trahirait
+ * un repliement manqué autour du méridien — l'après-midi rendu comme un matin,
+ * et une façade ouest jamais protégée. */
+$precedent = null;
+$reculs    = 0;
+for ($t = $ete['sunrise']; $t <= $ete['sunset']; $t += 300) {
+    $azimut = voletautobeSun::sunPosition($t, LAT, LON)['azimuth'];
+    if ($precedent !== null && $azimut <= $precedent) {
+        $reculs++;
+    }
+    $precedent = $azimut;
+}
+verifie('l\'azimut croît du lever au coucher', $reculs, 0);
+
+/*
+ * Le fuseau du serveur ne doit rien changer : l'entrée est un horodatage, pas
+ * une heure murale, et tout le calcul se fait en UTC. C'est le piège invisible
+ * de ce lot — un calcul mené en heure locale se décalerait d'une heure du
+ * dernier dimanche de mars au dernier d'octobre, la protection solaire
+ * partirait une heure trop tard tout l'été, et rien, nulle part, ne lèverait
+ * la moindre erreur.
+ */
+$instant   = mktime(15, 0, 0, 8, 4, 2026);
+$bruxelles = voletautobeSun::sunPosition($instant, LAT, LON);
+date_default_timezone_set('UTC');
+$ailleurs = voletautobeSun::sunPosition($instant, LAT, LON);
+date_default_timezone_set('Europe/Brussels');
+verifieVrai('le fuseau du serveur ne déplace pas le soleil',
+    abs($bruxelles['azimuth'] - $ailleurs['azimuth']) < 0.01);
+verifieVrai('ni en hauteur', abs($bruxelles['elevation'] - $ailleurs['elevation']) < 0.01);
+
+/* Sans position d'installation, il n'y a pas de position du soleil : rendre
+ * zéro ferait calculer la course du soleil au large du golfe de Guinée, et la
+ * condition de soleil filtrerait sur des valeurs inventées. */
+verifie('sans latitude, pas d\'azimut',
+        voletautobeSun::sunPosition($instant, null, null)['azimuth'], null);
+verifie('ni de hauteur',
+        voletautobeSun::sunPosition($instant, null, null)['elevation'], null);
+verifie('une latitude impossible ne rend rien non plus',
+        voletautobeSun::sunPosition($instant, 120, 4.35)['azimuth'], null);
+/* Une configuration Jeedom non renseignée arrive en chaîne vide, et (float) ''
+ * vaut zéro : sans ce contrôle, le plugin calculerait la course du soleil au
+ * large du golfe de Guinée et la condition filtrerait sur un soleil
+ * imaginaire, sans que rien ne signale l'absence de position. */
+verifie('une position vide n\'est pas la latitude zéro',
+        voletautobeSun::sunPosition($instant, '', '')['azimuth'], null);
+
+/* ----------------------------------------------------------------- 11 ---
+ * Le moment déclenché par la façade. L'azimut visé n'appartient pas au moment
+ * mais au groupe : « le soleil arrive sur la façade » vise son azimut de
+ * début, « il la quitte » celui de fin, et l'appelant a recopié les deux dans
+ * le réglage avant d'appeler. Le calcul n'a pas de formule directe : on balaie
+ * la journée par pas de dix minutes, puis on affine par dichotomie. */
+echo "\nMoment déclenché par la façade\n";
+$jourEte   = mktime(0, 0, 0, 6, 21, 2026);
+$jourHiver = mktime(0, 0, 0, 12, 21, 2026);
+
+verifie('le mode « arrivée sur la façade » est retenu',
+        voletautobeSun::cleanSlot(array('mode' => 'facade_in'))['mode'],
+        voletautobeSun::MODE_FACADE_IN);
+verifie('le mode « départ de la façade » aussi',
+        voletautobeSun::cleanSlot(array('mode' => 'facade_out'))['mode'],
+        voletautobeSun::MODE_FACADE_OUT);
+verifieVrai('les deux se reconnaissent ensemble',
+    voletautobeSun::isFacadeMode(voletautobeSun::MODE_FACADE_IN)
+    && voletautobeSun::isFacadeMode(voletautobeSun::MODE_FACADE_OUT));
+verifieVrai('le coucher du soleil n\'en est pas un',
+    !voletautobeSun::isFacadeMode(voletautobeSun::MODE_SUNSET));
+/* L'ancien mode « azimut » et son champ propre au moment ont disparu : une
+ * façade qui commence à 200° les remplace exactement, avec un réglage de
+ * moins et une seule orientation écrite quelque part. Un réglage resté dans
+ * l'ancien format retombe sur l'heure fixe — c'est la migration qui le
+ * traduit, pas la normalisation. */
+verifie('l\'ancien mode « azimut » n\'existe plus',
+        voletautobeSun::cleanSlot(array('mode' => 'azimuth'))['mode'],
+        voletautobeSun::MODE_FIXED);
+verifieVrai('et le moment ne porte plus d\'azimut à lui',
+    !array_key_exists('azimuth', voletautobeSun::emptySlot()));
+verifieVrai('un azimut envoyé par erreur n\'est pas conservé',
+    !array_key_exists('azimuth', voletautobeSun::cleanSlot(array('azimuth' => 200))));
+/* La façade, elle, reste dans la forme normalisée du moment : la classe ne
+ * connaît pas Jeedom et ne peut pas aller la chercher toute seule. */
+verifie('la façade du groupe arrive avec le moment',
+        voletautobeSun::cleanSlot(array('sun_from' => '202,5'))['sun_from'], 202.5);
+
+/* Une façade sud-sud-ouest : le soleil y arrive au 200° et la quitte au 260°.
+ * Les mêmes deux nombres servent au déclencheur et à la condition — c'est tout
+ * l'objet de cette reprise. */
+$facade = voletautobeSun::cleanSlot(array('enable' => 1, 'action' => 'position',
+                                          'mode' => 'facade_in',
+                                          'sun_from' => 200, 'sun_to' => 260));
+$quand   = voletautobeSun::occurrence($facade, $jourEte, LAT, LON);
+$atteint = voletautobeSun::sunPosition($quand, LAT, LON);
+verifieVrai('à l\'heure trouvée, le soleil arrive bien au 200°',
+    abs($atteint['azimuth'] - 200) < 0.2);
+verifieVrai('et c\'est l\'après-midi', (int) date('H', $quand) >= 12);
+/* Le même appel doit rendre la même heure : une dichotomie qui partirait d'un
+ * tirage ou d'un « maintenant » ferait danser l'heure annoncée dans
+ * l'interface d'un rafraîchissement à l'autre. */
+verifie('deux appels, même heure', voletautobeSun::occurrence($facade, $jourEte, LAT, LON), $quand);
+
+$sortie = voletautobeSun::cleanSlot(array('enable' => 1, 'action' => 'up',
+                                          'mode' => 'facade_out',
+                                          'sun_from' => 200, 'sun_to' => 260));
+$fin    = voletautobeSun::occurrence($sortie, $jourEte, LAT, LON);
+$quitte = voletautobeSun::sunPosition($fin, LAT, LON);
+verifieVrai('et le soleil quitte la façade au 260°', abs($quitte['azimuth'] - 260) < 0.2);
+/* La fin de protection vient forcément après son début : si les deux modes
+ * lisaient le même champ, les volets rouvriraient à l'heure où ils auraient dû
+ * se fermer, et personne ne comprendrait pourquoi. */
+verifieVrai('la fin de protection vient après le début', $fin > $quand);
+$autreFin = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                            'sun_from' => 200, 'sun_to' => 300));
+verifie('l\'arrivée ne dépend que de l\'azimut de début',
+        voletautobeSun::occurrence($autreFin, $jourEte, LAT, LON), $quand);
+
+$plein = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                         'sun_from' => 180, 'sun_to' => 270));
+verifieVrai('une façade plein sud est prise au midi solaire de juin',
+    abs(voletautobeSun::occurrence($plein, $jourEte, LAT, LON) - $midiEte) < 60);
+verifieVrai('et à celui de décembre',
+    abs(voletautobeSun::occurrence($plein, $jourHiver, LAT, LON) - $midiHiver) < 60);
+
+/*
+ * La façade que le soleil n'atteint jamais. À Bruxelles le 21 décembre, il se
+ * lève déjà au 128° : une façade plein est, de 45° à 110°, ne voit pas le
+ * soleil de la journée. Elle ne doit se replier ni sur minuit ni sur le lever,
+ * sinon sa protection solaire partirait tous les jours de l'hiver, en pleine
+ * nuit, sans que rien ne l'explique.
+ */
+$est = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                       'sun_from' => 45, 'sun_to' => 110,
+                                       'sun_elevation' => 5));
+$jamais = voletautobeSun::occurrence($est, $jourHiver, LAT, LON);
+verifieVrai('une façade plein est n\'est pas atteinte en décembre', $jamais === null);
+verifieVrai('et ce n\'est pas un zéro qui passerait pour minuit', $jamais !== 0);
+verifieVrai('ni l\'heure du lever, faute de mieux', $jamais !== $hiver['sunrise']);
+verifieVrai('ni minuit de ce jour-là', $jamais !== $jourHiver);
+verifieVrai('alors qu\'en juin, si',
+    voletautobeSun::occurrence($est, $jourEte, LAT, LON) !== null);
+/* Et puisque le départ se cherche à partir de l'arrivée, il n'a pas lieu non
+ * plus : une fin de protection sans protection n'aurait aucun sens. */
+$estSortie = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                             'sun_from' => 45, 'sun_to' => 110,
+                                             'sun_elevation' => 5));
+verifieVrai('et le départ n\'a pas lieu non plus ce jour-là',
+    voletautobeSun::occurrence($estSortie, $jourHiver, LAT, LON) === null);
+
+/*
+ * La hauteur minimale que le soleil n'atteint pas du jour. C'est l'autre façon
+ * de n'être jamais sur la façade, et elle ne se voit pas sur l'azimut : le
+ * 21 décembre à Bruxelles le soleil passe bien du sud-est au sud-ouest, mais
+ * il culmine à 15,8° et une façade qui demande 40° ne le voit pas.
+ */
+$tropHaut = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                            'sun_from' => 135, 'sun_to' => 315,
+                                            'sun_elevation' => 40));
+$tropHautFin = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                               'sun_from' => 135, 'sun_to' => 315,
+                                               'sun_elevation' => 40));
+verifieVrai('une hauteur jamais atteinte : pas d\'arrivée',
+    voletautobeSun::occurrence($tropHaut, $jourHiver, LAT, LON) === null);
+verifieVrai('et pas de départ non plus',
+    voletautobeSun::occurrence($tropHautFin, $jourHiver, LAT, LON) === null);
+verifieVrai('alors que le même réglage tient en juin',
+    voletautobeSun::occurrence($tropHaut, $jourEte, LAT, LON) !== null);
+$fenetreVide = voletautobeSun::facadeWindow($tropHaut, $jourHiver, LAT, LON);
+verifieVrai('l\'intervalle entier est vide, franchement',
+    $fenetreVide['in'] === null && $fenetreVide['out'] === null);
+
+/* Le même cas par l'autre bout : en décembre, quand le soleil tourne enfin au
+ * sud-ouest, il rase à moins de 15° et n'est donc jamais sur cette façade-là.
+ * La fin de protection n'a pas lieu, et c'est juste : la protection elle-même
+ * n'a pas eu lieu non plus. */
+$jusquAuCoucher = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                                  'sun_from' => 200, 'sun_to' => 300));
+verifieVrai('le soleil ne quitte pas cette façade en décembre',
+    voletautobeSun::occurrence($jusquAuCoucher, $jourHiver, LAT, LON) === null);
+verifieVrai('mais il la quitte en juin',
+    voletautobeSun::occurrence($jusquAuCoucher, $jourEte, LAT, LON) !== null);
+
+/* Le soleil déjà sur la façade en se levant y arrive à l'heure du lever, et
+ * pas dix minutes plus tard : le balayage doit accepter la borne de son
+ * premier intervalle. La façade descend ici jusqu'à l'horizon — une hauteur
+ * minimale retarderait l'arrivée, et c'est le contrôle suivant qui le dit. */
+$auLever = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                           'sun_from' => $leverEte['azimuth'] - 5,
+                                           'sun_to' => 300,
+                                           'sun_elevation' => -10));
+verifieVrai('une façade prise dès le lever est datée de l\'heure du lever',
+    abs(voletautobeSun::occurrence($auLever, $jourEte, LAT, LON) - $ete['sunrise']) < 60);
+/* La même façade avec une hauteur minimale : l'arrivée n'est plus le lever
+ * mais le passage au-dessus de la hauteur, le soleil étant déjà dans la
+ * fenêtre d'azimut en se levant. C'est la moitié du modèle que la première
+ * version oubliait. */
+$auLeverHaut = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                               'sun_from' => $leverEte['azimuth'] - 5,
+                                               'sun_to' => 300,
+                                               'sun_elevation' => 10));
+$arriveeHaute = voletautobeSun::occurrence($auLeverHaut, $jourEte, LAT, LON);
+verifieVrai('avec une hauteur minimale, l\'arrivée est plus tard',
+    $arriveeHaute > $ete['sunrise'] + 1800);
+verifieVrai('et c\'est très exactement le passage au-dessus de la hauteur',
+    abs(voletautobeSun::sunPosition($arriveeHaute, LAT, LON)['elevation'] - 10) < 0.05);
+
+/*
+ * Les trois façons de quitter une façade, et c'est tout l'objet de cette
+ * reprise. Le soleil s'en va par le côté, par le bas, ou parce qu'il se
+ * couche — la première des trois qui survient. Ne viser que l'azimut de fin
+ * laissait la fin de protection sans date la moitié de l'année ; avec la
+ * façade livrée par défaut, qui va jusqu'au 315°, elle n'en avait aucun jour.
+ */
+$parAzimut     = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                                 'sun_from' => 90, 'sun_to' => 180,
+                                                 'sun_elevation' => 15));
+$sortieAzimut  = voletautobeSun::occurrence($parAzimut, $jourEte, LAT, LON);
+$positionSortie = voletautobeSun::sunPosition($sortieAzimut, LAT, LON);
+verifieVrai('une façade est se quitte au 180°, par l\'azimut',
+    abs($positionSortie['azimuth'] - 180) < 0.2);
+verifieVrai('et non au coucher, huit heures plus tard',
+    $sortieAzimut < $ete['sunset'] - 8 * 3600);
+verifieVrai('le soleil y est même au plus haut de sa journée',
+    $positionSortie['elevation'] > 60);
+
+$parHauteur     = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                                  'sun_from' => 135, 'sun_to' => 315,
+                                                  'sun_elevation' => 15));
+$sortieHauteur  = voletautobeSun::occurrence($parHauteur, $jourEte, LAT, LON);
+$positionSortie = voletautobeSun::sunPosition($sortieHauteur, LAT, LON);
+verifieVrai('la façade par défaut, elle, se quitte par la hauteur',
+    abs($positionSortie['elevation'] - 15) < 0.05);
+verifieVrai('son azimut étant encore loin du 315°',
+    $positionSortie['azimuth'] < 300);
+verifieVrai('et le soleil se couchant près de deux heures plus tard',
+    $sortieHauteur < $ete['sunset'] - 3600);
+
+/* Et le coucher, quand ni l'un ni l'autre ne survient : en décembre, le soleil
+ * se couche au 232° sans avoir atteint le 315° ni être passé sous l'horizon
+ * avant l'heure. C'est le coucher qui le fait quitter la façade, à la seconde
+ * où date_sun_info le place. */
+$parCoucher = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                              'sun_from' => 200, 'sun_to' => 315,
+                                              'sun_elevation' => -10));
+verifie('faute de mieux, le soleil quitte la façade en se couchant',
+        voletautobeSun::occurrence($parCoucher, $jourHiver, LAT, LON), $hiver['sunset']);
+
+/* « 20 minutes après que le soleil arrive sur la façade » : le temps qu'elle
+ * chauffe. Le décalage s'ajoute comme pour le coucher du soleil, et il se
+ * retranche tout aussi bien de la fin de protection. */
+$apresFacade = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                               'sun_from' => 200, 'sun_to' => 260,
+                                               'offset' => 20));
+verifie('le décalage s\'ajoute à l\'arrivée sur la façade',
+        voletautobeSun::occurrence($apresFacade, $jourEte, LAT, LON), $quand + 1200);
+$avantFin = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                            'sun_from' => 200, 'sun_to' => 260,
+                                            'offset' => -15));
+verifie('et se retranche du départ',
+        voletautobeSun::occurrence($avantFin, $jourEte, LAT, LON), $fin - 900);
+
+/* Les garde-fous et les jours de semaine valent aussi ici : ils s'appliquent
+ * après le calcul, comme pour tous les autres modes. */
+$mardiSeul = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                             'sun_from' => 200, 'days' => array(2)));
+verifie('jour non coché : rien, même en mode façade',
+        voletautobeSun::occurrence($mardiSeul, $jourHiver, LAT, LON), null);
+$gardeFacade = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                               'sun_from' => 200, 'sun_elevation' => 0,
+                                               'not_before' => '16:00'));
+verifie('le plancher s\'applique aussi au mode façade',
+        heure(voletautobeSun::occurrence($gardeFacade, $jourHiver, LAT, LON)), '2026-12-21 16:00');
+
+/* Au Svalbard en juin le soleil ne se couche pas, et sun() ne rend ni lever ni
+ * coucher : sans fenêtre à balayer, il n'y a pas d'heure à annoncer. */
+verifie('au Svalbard en juin, aucune façade n\'est datée',
+        voletautobeSun::occurrence($plein, $jourEte, 78.2, 15.6), null);
+
+/*
+ * Une année entière, et l'invariant qui compte : dès qu'il y a une arrivée, il
+ * y a un départ. C'est ce qui manquait — une protection solaire qui se ferme
+ * sans jamais se rouvrir est pire que pas de protection du tout.
+ *
+ * La façade sud-sud-ouest de 200° à 260°, avec les 15° de hauteur minimale par
+ * défaut, n'est prise que 321 jours sur 365 : en plein hiver, quand le soleil
+ * tourne enfin au sud-ouest, il rase déjà à moins de 15°. Un déclencheur de
+ * façade peut légitimement ne rien donner certains jours, et le moment est
+ * alors simplement absent du programme. Une façade plein est, elle, n'est
+ * éclairée qu'à la belle saison : le soleil d'hiver se lève déjà trop au sud.
+ */
+$manquants = 0;
+$atteints  = 0;
+$sansFin   = 0;
+$inverses  = 0;
+for ($j = 0; $j < 365; $j++) {
+    $base   = strtotime('2026-01-01 +' . $j . ' day');
+    $debut  = voletautobeSun::occurrence($facade, $base, LAT, LON, 'annee');
+    $depart = voletautobeSun::occurrence($sortie, $base, LAT, LON, 'annee');
+    if (voletautobeSun::occurrence($est, $base, LAT, LON, 'annee') !== null) {
+        $atteints++;
+    }
+    if ($debut === null) {
+        $manquants++;
+        /* Un départ sans arrivée : les volets rouvriraient sans s'être
+         * fermés, ce qui est aussi faux que l'inverse. */
+        if ($depart !== null) {
+            $inverses++;
+        }
+        continue;
+    }
+    if ($depart === null) {
+        $sansFin++;
+    } elseif ($depart <= $debut) {
+        $inverses++;
+    }
+}
+verifie('la façade sud-sud-ouest n\'est prise que 321 jours sur 365',
+        365 - $manquants, 321);
+verifieVrai('la façade plein est seulement la belle saison',
+    $atteints > 200 && $atteints < 260);
+/* L'invariant, et le défaut corrigé : le soleil finit toujours par quitter la
+ * façade — par le côté, par le bas, ou en se couchant. Un jour où il y arrive
+ * sans jamais en partir n'existe pas. */
+verifie('jamais d\'arrivée sans départ, aucun jour de l\'année', $sansFin, 0);
+/* Et jamais, aucun jour de l'année, la fin de protection ne précède le début :
+ * ce serait rouvrir les volets avant de les avoir fermés. */
+verifie('la fin de protection ne précède jamais le début', $inverses, 0);
+
+/*
+ * La façade livrée par défaut, à la latitude de l'installation. C'est la
+ * mesure qui a fait découvrir le défaut : à 50,5476° de latitude, le soleil ne
+ * se couche jamais au-delà du 310,1° — 232,5° au solstice d'hiver, 310,1° à
+ * celui d'été. La façade par défaut va jusqu'au 315° : viser cet azimut,
+ * c'était attendre un instant qui n'arrive aucun jour de l'année, et la fin de
+ * protection ne rouvrait jamais rien.
+ *
+ * Seule la latitude compte ici — c'est elle qui borne la course du soleil ; la
+ * longitude ne fait que décaler l'horloge.
+ */
+echo "\nLa façade livrée par défaut, à la latitude de l'installation\n";
+$latMaison = 50.5476;
+$lonMaison = 5.0;
+$coucherMaximal = 0.0;
+for ($j = 0; $j < 365; $j++) {
+    $base    = strtotime('2026-01-01 +' . $j . ' day');
+    $journee = voletautobeSun::sun($base, $latMaison, $lonMaison);
+    $azimut  = voletautobeSun::sunPosition($journee['sunset'], $latMaison, $lonMaison)['azimuth'];
+    if ($azimut > $coucherMaximal) {
+        $coucherMaximal = $azimut;
+    }
+}
+verifieVrai('le soleil ne se couche jamais au-delà du 310,1°',
+    $coucherMaximal > 310.0 && $coucherMaximal < 310.2);
+verifieVrai('le 315° de la façade par défaut n\'est donc jamais atteint',
+    $coucherMaximal < voletautobeSun::emptySlot()['sun_to']);
+
+$defautDebut = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in'));
+$defautFin   = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out'));
+verifie('c\'est bien la façade par défaut, sans rien y toucher',
+        $defautDebut['sun_from'] . '-' . $defautDebut['sun_to'] . '@' . $defautDebut['sun_elevation'],
+        '135-315@15');
+
+$joursHauts = 0;
+$sansDebut  = 0;
+$sansDepart = 0;
+$inverses   = 0;
+$plusCourte = null;
+$jourCourt  = '';
+for ($j = 0; $j < 365; $j++) {
+    $base    = strtotime('2026-01-01 +' . $j . ' day');
+    $journee = @date_sun_info(strtotime(date('Y-m-d', $base) . ' 12:00'), $latMaison, $lonMaison);
+    $culmine = voletautobeSun::sunPosition($journee['transit'], $latMaison, $lonMaison)['elevation'];
+    if ($culmine < $defautDebut['sun_elevation']) {
+        continue;
+    }
+    $joursHauts++;
+    $debut  = voletautobeSun::occurrence($defautDebut, $base, $latMaison, $lonMaison, 'maison');
+    $depart = voletautobeSun::occurrence($defautFin, $base, $latMaison, $lonMaison, 'maison');
+    if ($debut === null) {
+        $sansDebut++;
+        continue;
+    }
+    if ($depart === null) {
+        $sansDepart++;
+        continue;
+    }
+    if ($depart <= $debut) {
+        $inverses++;
+    }
+    if ($plusCourte === null || ($depart - $debut) < $plusCourte) {
+        $plusCourte = $depart - $debut;
+        $jourCourt  = date('Y-m-d', $base);
+    }
+}
+/* À cette latitude le soleil monte au-dessus de 15° tous les jours de
+ * l'année : il culmine encore à 16,1° au solstice d'hiver. */
+verifie('le soleil passe les 15° les 365 jours de l\'année', $joursHauts, 365);
+verifie('la protection a un début chacun de ces jours', $sansDebut, 0);
+verifie('et une fin chacun de ces jours', $sansDepart, 0);
+verifie('la fin suivant toujours le début', $inverses, 0);
+/* La journée la plus courte est celle du solstice d'hiver, et la fenêtre y
+ * dure 1 h 54 min 29 s — 6 869 secondes mesurées, d'un 166,4° à 15,00° de
+ * hauteur jusqu'à un 193,6° à 15,00° : c'est la hauteur qui ouvre la fenêtre
+ * et la hauteur qui la referme, l'azimut n'y est jamais pour rien. La fenêtre
+ * existe donc bel et bien, et elle est courte, ce qui est exactement ce qu'on
+ * veut : les volets se ferment à midi et se rouvrent au début de
+ * l'après-midi. */
+verifie('la plus courte fenêtre de l\'année tombe au solstice d\'hiver',
+        $jourCourt, '2026-12-21');
+verifieVrai('et elle dure 1 h 54 min (6 869 s mesurées)',
+    abs($plusCourte - 6869) < 30);
+$solstice  = mktime(0, 0, 0, 12, 21, 2026);
+$fenetreHiver = voletautobeSun::facadeWindow($defautDebut, $solstice, $latMaison, $lonMaison);
+$entree = voletautobeSun::sunPosition($fenetreHiver['in'], $latMaison, $lonMaison);
+$sortieH = voletautobeSun::sunPosition($fenetreHiver['out'], $latMaison, $lonMaison);
+verifieVrai('elle s\'ouvre sur la hauteur, à 15° pile',
+    abs($entree['elevation'] - 15) < 0.05);
+verifieVrai('et se referme sur la hauteur, à 15° pile aussi',
+    abs($sortieH['elevation'] - 15) < 0.05);
+verifieVrai('l\'azimut, lui, reste au sud d\'un bout à l\'autre',
+    $entree['azimuth'] > 160 && $sortieH['azimuth'] < 200);
+/* Au solstice d'été, la même façade tient huit heures, et c'est la hauteur qui
+ * la referme là encore, une heure et demie avant le coucher. */
+$fenetreEte = voletautobeSun::facadeWindow($defautDebut, mktime(0, 0, 0, 6, 21, 2026), $latMaison, $lonMaison);
+verifieVrai('au solstice d\'été, la même fenêtre dure huit heures (28 788 s)',
+    abs(($fenetreEte['out'] - $fenetreEte['in']) - 28788) < 60);
+verifieVrai('elle s\'ouvre au 135°, sur l\'azimut cette fois',
+    abs(voletautobeSun::sunPosition($fenetreEte['in'], $latMaison, $lonMaison)['azimuth'] - 135) < 0.2);
+verifieVrai('et se referme sur la hauteur, avant le coucher',
+    $fenetreEte['out'] < voletautobeSun::sun(mktime(0, 0, 0, 6, 21, 2026), $latMaison, $lonMaison)['sunset'] - 3600);
+
+/* ----------------------------------------------------------------- 12 ---
+ * La condition de soleil, et les noms de direction. C'est le pendant de la
+ * condition de température : le moment est joué, mais seulement si le soleil
+ * est réellement sur cette façade-là. */
+echo "\nCondition de soleil\n";
+$sansSoleil = voletautobeSun::cleanSlot(array('enable' => 1, 'sun_mode' => 'none'));
+/* Un moment à heure fixe : « à 13 h, seulement si le soleil est sur la
+ * façade ». C'est le cas où la fenêtre filtre vraiment, et il faut le dire ici
+ * puisque ce n'est plus vrai de tous les moments — un déclencheur de façade,
+ * lui, a déjà posé le soleil sur sa borne. */
+$facadeSO   = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'fixed',
+                                              'time' => '13:00', 'sun_mode' => 'window',
+                                              'sun_from' => 135, 'sun_to' => 315,
+                                              'sun_elevation' => 15));
+verifie('fenêtre par défaut : du sud-est au nord-ouest',
+        voletautobeSun::emptySlot()['sun_from'], 135.0);
+verifie('jusqu\'au 315°', voletautobeSun::emptySlot()['sun_to'], 315.0);
+verifie('hauteur minimale par défaut à 15°',
+        voletautobeSun::emptySlot()['sun_elevation'], 15.0);
+verifie('aucune condition de soleil par défaut',
+        voletautobeSun::emptySlot()['sun_mode'], voletautobeSun::SUN_NONE);
+verifie('condition de soleil inconnue retombe sur aucune',
+        voletautobeSun::cleanSlot(array('sun_mode' => 'plein'))['sun_mode'], voletautobeSun::SUN_NONE);
+verifie('azimut de début borné',
+        voletautobeSun::cleanSlot(array('sun_from' => '400'))['sun_from'], 360.0);
+verifie('azimut de fin borné par le bas',
+        voletautobeSun::cleanSlot(array('sun_to' => '-20'))['sun_to'], 0.0);
+verifie('hauteur minimale bornée par le bas',
+        voletautobeSun::cleanSlot(array('sun_elevation' => '-90'))['sun_elevation'], -10.0);
+verifie('et par le haut',
+        voletautobeSun::cleanSlot(array('sun_elevation' => '200'))['sun_elevation'], 90.0);
+verifie('une hauteur à virgule est comprise',
+        voletautobeSun::cleanSlot(array('sun_elevation' => '12,5'))['sun_elevation'], 12.5);
+
+$verdict = voletautobeSun::sunCheck($sansSoleil, 12.0, 40.0);
+verifie('aucune condition : on bouge', $verdict['met'], true);
+verifie('et la raison le dit', $verdict['reason'], 'none');
+verifie('aucune condition : rien à savoir', $verdict['known'], true);
+
+$verdict = voletautobeSun::sunCheck($facadeSO, 200.0, 35.0);
+verifie('soleil sur la façade : on ferme', $verdict['met'], true);
+verifie('raison ok', $verdict['reason'], 'ok');
+$verdict = voletautobeSun::sunCheck($facadeSO, 100.0, 35.0);
+verifie('soleil à l\'est : on ne ferme pas', $verdict['met'], false);
+verifie('et on sait pourquoi', $verdict['reason'], 'azimuth_out');
+$verdict = voletautobeSun::sunCheck($facadeSO, 200.0, 8.4);
+verifie('soleil trop bas : on ne ferme pas', $verdict['met'], false);
+verifie('et on sait pourquoi', $verdict['reason'], 'too_low');
+verifie('le seuil de hauteur pile compte comme rempli',
+        voletautobeSun::sunCheck($facadeSO, 200.0, 15.0)['met'], true);
+verifie('un dixième de degré sous le seuil ne passe pas',
+        voletautobeSun::sunCheck($facadeSO, 200.0, 14.9)['reason'], 'too_low');
+verifie('les bornes de la fenêtre sont dedans',
+        voletautobeSun::sunCheck($facadeSO, 135.0, 35.0)['met'], true);
+verifie('l\'autre borne aussi',
+        voletautobeSun::sunCheck($facadeSO, 315.0, 35.0)['met'], true);
+verifie('un dixième de degré au-delà, dehors',
+        voletautobeSun::sunCheck($facadeSO, 315.1, 35.0)['met'], false);
+
+/* La hauteur se teste avant l'azimut. En pleine nuit le soleil a un azimut
+ * parfaitement défini et parfaitement hors sujet : annoncer « hors de la
+ * fenêtre » enverrait l'utilisateur corriger une fenêtre qui n'a rien de faux,
+ * alors que la vraie raison est qu'il fait nuit. */
+verifie('la nuit, la raison est « trop bas » et non « hors fenêtre »',
+        voletautobeSun::sunCheck($facadeSO, 100.0, -20.0)['reason'], 'too_low');
+
+/*
+ * La position inconnue se traite comme la sonde muette : on bouge quand même.
+ * Le cas se produit quand la position de l'installation n'est pas renseignée,
+ * et si « on ne sait pas » empêchait le mouvement, la protection solaire ne se
+ * jouerait jamais sans que rien ne l'explique.
+ */
+$verdict = voletautobeSun::sunCheck($facadeSO, null, null);
+verifie('position inconnue : on bouge quand même', $verdict['met'], true);
+verifie('mais on note qu\'on ne savait pas', $verdict['known'], false);
+verifie('raison inconnue', $verdict['reason'], 'unknown');
+verifie('un azimut sans hauteur ne suffit pas',
+        voletautobeSun::sunCheck($facadeSO, 200.0, null)['reason'], 'unknown');
+verifie('une hauteur sans azimut non plus',
+        voletautobeSun::sunCheck($facadeSO, null, 35.0)['reason'], 'unknown');
+verifie('sans condition, une position inconnue n\'est pas un sujet',
+        voletautobeSun::sunCheck($sansSoleil, null, null)['reason'], 'none');
+/* Un azimut de zéro est une direction — le nord — et non une absence de
+ * mesure : les confondre rendrait la condition muette chaque fois que le
+ * soleil passe au nord, c'est-à-dire en pleine nuit d'été. */
+verifie('un azimut de zéro reste une mesure',
+        voletautobeSun::sunCheck($facadeSO, 0.0, 35.0)['known'], true);
+
+/*
+ * La fenêtre qui passe par le nord. « De 300° à 30° » est une façade
+ * nord-ouest–nord-est : elle doit contenir 350°, pas l'exclure. Un simple
+ * « from <= a && a <= to » la rendrait toujours vide, la condition ne serait
+ * jamais remplie, et le réglage aurait pourtant l'air juste dans l'interface.
+ */
+$facadeNord = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'fixed',
+                                              'time' => '13:00', 'sun_mode' => 'window',
+                                              'sun_from' => 300, 'sun_to' => 30,
+                                              'sun_elevation' => 0));
+verifie('la fenêtre passe par le nord : 350° est dedans',
+        voletautobeSun::sunCheck($facadeNord, 350.0, 20.0)['met'], true);
+verifie('310° aussi', voletautobeSun::sunCheck($facadeNord, 310.0, 20.0)['met'], true);
+verifie('le nord lui-même aussi', voletautobeSun::sunCheck($facadeNord, 0.0, 20.0)['met'], true);
+verifie('et 20°, de l\'autre côté', voletautobeSun::sunCheck($facadeNord, 20.0, 20.0)['met'], true);
+verifie('mais le sud est dehors', voletautobeSun::sunCheck($facadeNord, 180.0, 20.0)['met'], false);
+verifie('et l\'est aussi', voletautobeSun::sunCheck($facadeNord, 100.0, 20.0)['reason'], 'azimuth_out');
+/* Et dans l'autre sens, la même fenêtre lue à l'endroit exclut ce que la
+ * précédente contenait : les deux écritures ne doivent pas se confondre. */
+verifieVrai('de 30° à 300°, 350° est dehors', !voletautobeSun::azimuthInWindow(350, 30, 300));
+verifieVrai('et 180° est dedans', voletautobeSun::azimuthInWindow(180, 30, 300));
+/* Un début égal à la fin est une fenêtre vide, pas le tour complet : c'est une
+ * erreur de saisie, et fermer les volets à toute heure du jour serait la pire
+ * façon de l'apprendre à son auteur. */
+verifieVrai('début égal à la fin : fenêtre vide',
+    !voletautobeSun::azimuthInWindow(200, 180, 180));
+verifieVrai('pas même son propre azimut',
+    !voletautobeSun::azimuthInWindow(180, 180, 180));
+
+/* Le cas réel qui justifie la hauteur minimale : le 21 décembre à 15 h, le
+ * soleil est bien sur la façade sud-ouest, mais il rase à moins de 10° — il
+ * passe derrière les maisons d'en face, et fermer les volets à ce moment-là ne
+ * protège de rien. */
+$decembre = voletautobeSun::sunPosition(strtotime('2026-12-21 15:00'), LAT, LON);
+verifieVrai('un après-midi de décembre, le soleil est sur la façade',
+    voletautobeSun::azimuthInWindow($decembre['azimuth'], 135, 315));
+verifie('mais trop bas pour qu\'on ferme',
+        voletautobeSun::sunCheck($facadeSO, $decembre['azimuth'], $decembre['elevation'])['reason'], 'too_low');
+$juillet = voletautobeSun::sunPosition(strtotime('2026-06-21 15:00'), LAT, LON);
+verifie('le même quart d\'heure en juin, on ferme',
+        voletautobeSun::sunCheck($facadeSO, $juillet['azimuth'], $juillet['elevation'])['reason'], 'ok');
+
+/*
+ * Le doublon, et c'est le contrôle le plus important de cette section.
+ *
+ * Quand c'est la façade qui déclenche le moment, la condition de soleil n'a
+ * plus rien à filtrer du tout. Le déclencheur ne vise plus un azimut : il rend
+ * l'instant où le soleil arrive sur la façade, ou celui où il la quitte, et
+ * « être sur la façade » veut dire azimut dans la fenêtre *et* hauteur
+ * au-dessus du seuil. Les deux moitiés de la condition sont donc vraies par
+ * construction à la seconde où le moment tombe.
+ *
+ * Les retester serait pire qu'inutile : la dichotomie s'arrête à la seconde
+ * près, et le soleil se retrouve aussi bien un millième de degré en deçà de la
+ * limite qu'au-delà. Ce serait jouer le moment à pile ou face — un « soleil
+ * hors de la fenêtre », ou un « soleil trop bas », un jour sur deux, sur un
+ * réglage parfaitement juste, sans rien dans l'interface pour l'expliquer. Et
+ * la fin de protection, elle, serait sautée tous les jours : au moment où le
+ * soleil quitte la façade, il n'y est par définition plus.
+ */
+echo "\nCondition de soleil et déclencheur de façade\n";
+$arrivee = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_in',
+                                           'sun_mode' => 'window',
+                                           'sun_from' => 135, 'sun_to' => 315,
+                                           'sun_elevation' => 15));
+$verdict = voletautobeSun::sunCheck($arrivee, 135.0, 35.0);
+verifie('à la limite exacte de la fenêtre, le moment se joue', $verdict['met'], true);
+verifie('et la raison le dit : il n\'y a plus de condition', $verdict['reason'], 'none');
+/* Le millième de degré en deçà : très exactement ce que rend une dichotomie à
+ * la seconde près, et très exactement ce qui aurait sauté un jour sur deux. */
+verifie('un millième de degré en deçà ne change rien',
+        voletautobeSun::sunCheck($arrivee, 134.999, 35.0)['met'], true);
+verifie('l\'azimut n\'est plus évalué du tout',
+        voletautobeSun::sunCheck($arrivee, 10.0, 35.0)['met'], true);
+verifie('« hors de la fenêtre » ne peut plus être la raison',
+        voletautobeSun::sunCheck($arrivee, 10.0, 35.0)['reason'], 'none');
+/* La hauteur non plus, et c'est la nouveauté : le déclencheur la garantit
+ * désormais lui-même, puisqu'il ne retient que les instants où le soleil est
+ * assez haut pour éclairer la façade. La retester ici ferait le même pile ou
+ * face au millième de degré, sur une fenêtre d'hiver qui s'ouvre et se referme
+ * très exactement sur ce seuil-là. */
+$verdict = voletautobeSun::sunCheck($arrivee, 135.0, 8.4);
+verifie('la hauteur non plus n\'est plus évaluée', $verdict['met'], true);
+verifie('et la raison reste « aucune »', $verdict['reason'], 'none');
+verifie('un dixième de degré sous le seuil ne saute plus rien',
+        voletautobeSun::sunCheck($arrivee, 135.0, 14.9)['reason'], 'none');
+verifie('ni même un soleil donné sous l\'horizon',
+        voletautobeSun::sunCheck($arrivee, 200.0, -20.0)['met'], true);
+/* Position inconnue : il n'y a plus rien qu'on ignore, puisqu'il n'y a plus
+ * rien à savoir. On bouge, et le journal n'a pas de doute à signaler. */
+verifie('position inconnue : on bouge quand même',
+        voletautobeSun::sunCheck($arrivee, null, null)['met'], true);
+verifie('et il n\'y a plus rien qu\'on ignore',
+        voletautobeSun::sunCheck($arrivee, null, null)['known'], true);
+verifie('la raison restant « aucune »',
+        voletautobeSun::sunCheck($arrivee, null, null)['reason'], 'none');
+
+/* La fin de protection est le cas le plus net : au moment où le soleil quitte
+ * la façade, il n'y est par définition plus — ni par l'azimut, ni par la
+ * hauteur, ni parce qu'il se couche. Poser la fenêtre en condition la ferait
+ * sauter tous les jours, et les volets resteraient à 30 % jusqu'au soir :
+ * l'exact contraire de ce qu'on voulait. */
+$depart = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                          'sun_mode' => 'window',
+                                          'sun_from' => 135, 'sun_to' => 315,
+                                          'sun_elevation' => 5));
+verifie('la fin de protection n\'est pas sautée par sa propre fenêtre',
+        voletautobeSun::sunCheck($depart, 315.0, 20.0)['met'], true);
+verifie('ni un dixième de degré au-delà',
+        voletautobeSun::sunCheck($depart, 315.1, 20.0)['met'], true);
+/* Et surtout pas par sa propre hauteur minimale : une façade quittée par le
+ * bas l'est très exactement au seuil, et une façade quittée au coucher l'est
+ * bien en dessous. C'est là que la fin de protection se perdait. */
+verifie('ni par la hauteur, quittée très exactement au seuil',
+        voletautobeSun::sunCheck($depart, 250.0, 5.0)['met'], true);
+verifie('ni par un soleil déjà couché',
+        voletautobeSun::sunCheck($depart, 232.0, -0.3)['reason'], 'none');
+
+/*
+ * Et cela, quelles que soient la position donnée et la fenêtre réglée : sur
+ * les deux modes de façade, la condition de soleil ne rend plus jamais autre
+ * chose que « aucune ». Sept positions — dont les deux limites, un soleil de
+ * nuit et une position inconnue — par quatre fenêtres, dont celle qui passe
+ * par le nord et celle, vide, dont les deux bornes sont égales.
+ */
+$positions = array(array(135.0, 35.0), array(315.0, 20.0), array(315.1, 20.0),
+                   array(10.0, 35.0), array(200.0, -20.0), array(0.0, 0.0),
+                   array(null, null));
+$fenetres  = array(array(135, 315, 15), array(300, 30, 0),
+                   array(180, 180, 40), array(0, 360, -10));
+$autreQueAucune = 0;
+$essais         = 0;
+foreach (array(voletautobeSun::MODE_FACADE_IN, voletautobeSun::MODE_FACADE_OUT) as $mode) {
+    foreach ($fenetres as $fenetre) {
+        $reglage = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => $mode,
+                                                   'sun_mode' => 'window',
+                                                   'sun_from' => $fenetre[0],
+                                                   'sun_to' => $fenetre[1],
+                                                   'sun_elevation' => $fenetre[2]));
+        foreach ($positions as $position) {
+            $essais++;
+            $verdict = voletautobeSun::sunCheck($reglage, $position[0], $position[1]);
+            if ($verdict['reason'] !== 'none' || $verdict['met'] !== true || $verdict['known'] !== true) {
+                $autreQueAucune++;
+            }
+        }
+    }
+}
+verifie('cinquante-six combinaisons éprouvées', $essais, 56);
+verifie('et pas une qui filtre quoi que ce soit', $autreQueAucune, 0);
+
+/*
+ * Et le même 315,1°, sur un moment à heure fixe, est bien dehors : la fenêtre
+ * garde tout son sens dès que le déclencheur ne vise pas la façade. « À 13 h,
+ * seulement si le soleil est sur la façade » est un réglage parfaitement
+ * utile, et c'est lui qu'on protège en ne coupant l'azimut que pour les deux
+ * modes de façade.
+ */
+verifie('à heure fixe, le même 315,1° est bien dehors',
+        voletautobeSun::sunCheck($facadeSO, 315.1, 20.0)['reason'], 'azimuth_out');
+verifie('et le 10° aussi',
+        voletautobeSun::sunCheck($facadeSO, 10.0, 35.0)['reason'], 'azimuth_out');
+verifie('tandis que le 200° passe', voletautobeSun::sunCheck($facadeSO, 200.0, 35.0)['met'], true);
+/* Y compris une fenêtre qui passe par le nord : elle non plus ne se confond
+ * pas avec un déclencheur de façade. */
+verifie('à heure fixe, la fenêtre par le nord tient toujours',
+        voletautobeSun::sunCheck($facadeNord, 350.0, 20.0)['met'], true);
+verifie('et exclut toujours le sud',
+        voletautobeSun::sunCheck($facadeNord, 180.0, 20.0)['reason'], 'azimuth_out');
+/* Le lever et le coucher du soleil ne visent aucun azimut : leur fenêtre
+ * filtre comme celle d'une heure fixe. */
+$soir = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'sunset',
+                                        'sun_mode' => 'window',
+                                        'sun_from' => 135, 'sun_to' => 315,
+                                        'sun_elevation' => 0));
+verifie('au coucher du soleil, l\'azimut filtre encore',
+        voletautobeSun::sunCheck($soir, 100.0, 20.0)['reason'], 'azimuth_out');
+
+/* Sans condition posée, un déclencheur de façade ne filtre plus rien du tout,
+ * pas même la hauteur : c'est le réglage par défaut de la fin de protection,
+ * et c'est voulu. */
+$departSansCondition = voletautobeSun::cleanSlot(array('enable' => 1, 'mode' => 'facade_out',
+                                                       'sun_mode' => 'none'));
+verifie('sans condition, la fin de protection se joue quoi qu\'il arrive',
+        voletautobeSun::sunCheck($departSansCondition, 315.0, -5.0)['met'], true);
+verifie('et la raison reste « aucune »',
+        voletautobeSun::sunCheck($departSansCondition, 315.0, -5.0)['reason'], 'none');
+
+echo "\nNoms de direction\n";
+verifie('seize secteurs', count(voletautobeSun::$_compass), 16);
+verifie('0° au nord', voletautobeSun::compassName(0), 'nord');
+verifie('90° à l\'est', voletautobeSun::compassName(90), 'est');
+verifie('180° au sud', voletautobeSun::compassName(180), 'sud');
+verifie('270° à l\'ouest', voletautobeSun::compassName(270), 'ouest');
+verifie('200° est sud-sud-ouest', voletautobeSun::compassName(200), 'sud-sud-ouest');
+verifie('112° est est-sud-est', voletautobeSun::compassName(112), 'est-sud-est');
+verifie('217° est sud-ouest', voletautobeSun::compassName(217), 'sud-ouest');
+/* Le dernier secteur revient au nord. Un modulo oublié chercherait un
+ * dix-septième nom à minuit d'été, quand le soleil passe sous le pôle : une
+ * erreur d'indice indéfini au pire moment, sur la tuile. */
+verifie('350° revient au nord', voletautobeSun::compassName(350), 'nord');
+verifie('360° aussi', voletautobeSun::compassName(360), 'nord');
+verifie('un azimut négatif fait le tour', voletautobeSun::compassName(-10), 'nord');
+verifie('et un azimut de 370° aussi', voletautobeSun::compassName(370), 'nord');
+
+/* ----------------------------------------------------------------- 13 ---
  * La reconnaissance des volets. */
 echo "\nReconnaissance des volets\n";
 $somfy = array(
@@ -518,7 +1337,7 @@ verifie('une action « other » n\'est pas un curseur',
 verifieVrai('une montée est une action',
     voletautobeVolets::roleMatchesType('up', array('type' => 'action', 'subType' => 'other')));
 
-/* ----------------------------------------------------------------- 11 ---
+/* ----------------------------------------------------------------- 14 ---
  * Les noms qui parlent de volets : « Volet du salon » d'un côté,
  * « voletsalonsud » de l'autre, tel qu'un identifiant MQTT le donne. Et
  * « bso », trois lettres qui se retrouvent partout si on les cherche mal. */
@@ -541,7 +1360,7 @@ verifie('« Arrêt » se normalise', voletautobeVolets::normalize('Arrêt'), 'ar
 verifie('les séparateurs deviennent des espaces',
         voletautobeVolets::normalizeWords('Volet — salon (sud)'), 'volet salon sud');
 
-/* ----------------------------------------------------------------- 12 ---
+/* ----------------------------------------------------------------- 15 ---
  * Les sondes de température. Une sonde oubliée, c'est toute la condition de
  * température qui paraît absente. */
 echo "\nReconnaissance des sondes\n";
@@ -603,7 +1422,7 @@ verifie('une puissance en W n\'est pas une température', voletautobeVolets::isT
     array('id' => 114, 'name' => 'Puissance', 'type' => 'info', 'subType' => 'numeric',
           'generic' => 'POWER', 'unit' => 'W')), false);
 
-/* ----------------------------------------------------------------- 13 ---
+/* ----------------------------------------------------------------- 16 ---
  * La position d'un groupe à partir de celle de ses volets.
  *
  * Le cas qui compte est le dernier : un groupe dont aucun volet ne publie sa

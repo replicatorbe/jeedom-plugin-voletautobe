@@ -155,16 +155,28 @@ try {
      * à l'ouverture d'un équipement. */
     if (init('action') == 'group') {
         $eqLogic = $getGroup(init('id'));
+        /* Où est le soleil maintenant : c'est ce qui permet de régler sa fenêtre
+         * sans sortir avec une boussole — on regarde par la fenêtre, on voit où
+         * tape le soleil, et on lit l'azimut affiché. Les deux valeurs sont
+         * nulles quand la position de l'installation n'est pas renseignée. */
+        $sun = voletautobe::sunNow();
+        /* Les quatre moments dans l'ordre de la journée, et les quatre : un
+         * aperçu oublié ici laisse le bloc correspondant muet dans la page,
+         * sans erreur ni message — la panne la plus difficile à relier à sa
+         * cause, puisque le réglage, lui, est bien enregistré. */
         ajax::success(array(
             'volets'          => $eqLogic->voletList(),
             'morning'         => $eqLogic->previewSlot('morning'),
-            'evening'         => $eqLogic->previewSlot('evening'),
             'heat'            => $eqLogic->previewSlot('heat'),
+            'shade_end'       => $eqLogic->previewSlot('shade_end'),
+            'evening'         => $eqLogic->previewSlot('evening'),
             'paused'          => $eqLogic->isPaused() ? 1 : 0,
             'pausedSince'     => $eqLogic->getConfiguration('paused_since', ''),
             'hasLocation'     => voletautobe::hasLocation() ? 1 : 0,
             'temperature'     => $eqLogic->temperature(),
             'temperatureName' => $eqLogic->temperatureName(),
+            'azimuth'         => $sun['azimuth'],
+            'elevation'       => $sun['elevation'],
         ));
     }
 

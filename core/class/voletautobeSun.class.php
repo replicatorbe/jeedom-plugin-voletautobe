@@ -16,22 +16,43 @@
  */
 
 /*
- * Quand un moment tombe, et si la température le permet.
+ * Quand un moment tombe, où est le soleil, et si la température le permet.
  *
  * Cette classe ne connaît ni Jeedom, ni base de données, ni commande : elle
  * reçoit un réglage, une position de la maison et une mesure, elle rend un
  * horodatage ou un verdict. C'est délibéré. Toute la subtilité du plugin est
  * là — un décalage sur le coucher du soleil, un garde-fou, un tirage
- * aléatoire, un jour de semaine, un seuil de température — et c'est la seule
- * partie qu'on peut éprouver hors ligne, sur une année entière, en une seconde
- * (voir tests/run.php). Le reste du plugin ne fait qu'appeler ces fonctions et
- * pousser des ordres aux volets.
+ * aléatoire, un jour de semaine, un seuil de température, la course du soleil
+ * dans le ciel — et c'est la seule partie qu'on peut éprouver hors ligne, sur
+ * une année entière, en une seconde (voir tests/run.php). Le reste du plugin
+ * ne fait qu'appeler ces fonctions et pousser des ordres aux volets.
  */
 class voletautobeSun {
 
     const MODE_FIXED   = 'fixed';
     const MODE_SUNSET  = 'sunset';
     const MODE_SUNRISE = 'sunrise';
+    /* Le moment tombe quand le soleil arrive sur la façade, ou quand il la
+     * quitte. Une heure fixe est approximative : le 13 h qui convient en juin
+     * laisse le soleil taper une heure de trop en août et ne veut plus rien
+     * dire en octobre, alors qu'une façade sud-ouest prend le soleil quand son
+     * azimut passe 200°, tous les jours de l'année.
+     *
+     * La façade visée n'est pas un réglage du moment : c'est l'orientation de
+     * la maison, qui appartient au groupe et vaut pour tous ses moments, et
+     * l'appelant l'a recopiée dans le moment avant d'appeler. Un azimut propre
+     * au moment ferait écrire deux fois la même orientation sans dire laquelle
+     * fait foi.
+     *
+     * Les deux modes lisent les deux bornes d'un même intervalle, celui que
+     * facadeWindow() découpe dans la journée : le soleil est sur la façade
+     * quand son azimut est dans la fenêtre et qu'il est assez haut pour
+     * l'éclairer. Il en part donc aussi bien en tournant qu'en descendant ou en
+     * se couchant — viser le seul azimut de fin laissait la fin de protection
+     * sans date, et avec la façade livrée par défaut, sans date aucun jour de
+     * l'année. */
+    const MODE_FACADE_IN  = 'facade_in';
+    const MODE_FACADE_OUT = 'facade_out';
 
     /* Bornes d'un décalage. Douze heures suffisent largement à tout usage réel
      * et empêchent un réglage absurde — « coucher du soleil + 2000 minutes » —
@@ -62,6 +83,39 @@ class voletautobeSun {
     const TEMP_MIN_VALUE = -50.0;
     const TEMP_MAX_VALUE = 60.0;
 
+    /* La condition de soleil : ne jouer le moment que si le soleil est bien
+     * sur cette façade-là. C'est le pendant de la condition de température, et
+     * elle répond à la même question posée autrement — une protection solaire
+     * n'a de sens que si le soleil tape sur la fenêtre. */
+    const SUN_NONE   = 'none';
+    const SUN_WINDOW = 'window';
+
+    /* Bornes d'un azimut : le tour complet, depuis le nord. */
+    const AZIMUTH_MIN_VALUE = 0.0;
+    const AZIMUTH_MAX_VALUE = 360.0;
+
+    /* Bornes d'une hauteur minimale. Le plancher descend sous zéro pour qui
+     * veut une fenêtre qui commence au ras de l'horizon, et le plafond est le
+     * zénith : au-delà, la condition ne serait jamais remplie nulle part. */
+    const ELEVATION_MIN_VALUE = -10.0;
+    const ELEVATION_MAX_VALUE = 90.0;
+
+    /*
+     * Les seize secteurs de la rose des vents, de 22,5° chacun, à partir du
+     * nord. Un azimut de 200° ne dit rien à personne ; « sud-sud-ouest » se
+     * vérifie depuis sa fenêtre, et c'est ainsi que l'utilisateur pense sa
+     * maison.
+     *
+     * Les noms ne passent pas par __() : cette classe ne connaît pas Jeedom.
+     * La traduction se fait chez l'appelant, comme pour voletautobe::$_days.
+     */
+    public static $_compass = array(
+        'nord', 'nord-nord-est', 'nord-est', 'est-nord-est',
+        'est', 'est-sud-est', 'sud-est', 'sud-sud-est',
+        'sud', 'sud-sud-ouest', 'sud-ouest', 'ouest-sud-ouest',
+        'ouest', 'ouest-nord-ouest', 'nord-ouest', 'nord-nord-ouest',
+    );
+
     /* Un réglage vide, tel qu'un équipement neuf le reçoit. */
     public static function emptySlot($_action = self::ACTION_UP) {
         $action = in_array($_action, array(self::ACTION_UP, self::ACTION_DOWN, self::ACTION_POSITION)) ? $_action : self::ACTION_UP;
@@ -82,6 +136,19 @@ class voletautobeSun {
             'days'       => array(1, 2, 3, 4, 5, 6, 7),
             'temp_mode'  => self::TEMP_NONE,
             'temp_value' => 0.0,
+            'sun_mode'   => self::SUN_NONE,
+            /* La façade du groupe, recopiée ici par l'appelant : la classe ne
+             * connaît pas Jeedom et doit recevoir l'orientation avec le
+             * moment. Sud-est à nord-ouest, la moitié du ciel où le soleil
+             * chauffe vraiment, et 15° de hauteur : sous cette hauteur le
+             * soleil rase, il passe derrière les maisons d'en face et ne
+             * justifie plus de fermer quoi que ce soit.
+             *
+             * Ces trois valeurs servent deux fois : elles visent l'azimut des
+             * modes de façade, et elles bornent la condition de soleil. */
+            'sun_from'      => 135.0,
+            'sun_to'        => 315.0,
+            'sun_elevation' => 15.0,
         );
     }
 
@@ -110,7 +177,7 @@ class voletautobeSun {
              * deux résultats que l'utilisateur n'a pas demandés. */
             $clean['position'] = max(0, min(100, (int) $_slot['position']));
         }
-        if (isset($_slot['mode']) && in_array($_slot['mode'], array(self::MODE_FIXED, self::MODE_SUNSET, self::MODE_SUNRISE))) {
+        if (isset($_slot['mode']) && in_array($_slot['mode'], array(self::MODE_FIXED, self::MODE_SUNSET, self::MODE_SUNRISE, self::MODE_FACADE_IN, self::MODE_FACADE_OUT))) {
             $clean['mode'] = $_slot['mode'];
         }
         $time = self::cleanTime(isset($_slot['time']) ? $_slot['time'] : '');
@@ -149,6 +216,19 @@ class voletautobeSun {
         if (isset($_slot['temp_value'])) {
             $clean['temp_value'] = self::cleanTemperature($_slot['temp_value']);
         }
+
+        if (isset($_slot['sun_mode']) && in_array($_slot['sun_mode'], array(self::SUN_NONE, self::SUN_WINDOW))) {
+            $clean['sun_mode'] = $_slot['sun_mode'];
+        }
+        if (isset($_slot['sun_from'])) {
+            $clean['sun_from'] = self::cleanAzimuth($_slot['sun_from']);
+        }
+        if (isset($_slot['sun_to'])) {
+            $clean['sun_to'] = self::cleanAzimuth($_slot['sun_to']);
+        }
+        if (isset($_slot['sun_elevation'])) {
+            $clean['sun_elevation'] = self::cleanElevation($_slot['sun_elevation']);
+        }
         return $clean;
     }
 
@@ -160,11 +240,30 @@ class voletautobeSun {
      * seul couperait à 5, silencieusement.
      */
     public static function cleanTemperature($_value) {
+        return max(self::TEMP_MIN_VALUE, min(self::TEMP_MAX_VALUE, self::toFloat($_value)));
+    }
+
+    /* Un azimut, ramené sur le tour de cadran. Une saisie hors bornes est une
+     * faute de frappe — « 1800 » pour « 180 » — et non une orientation : la
+     * ramener vaut mieux que de rendre la fenêtre de soleil impossible à
+     * satisfaire au point que le moment ne se joue plus jamais. */
+    public static function cleanAzimuth($_value) {
+        return max(self::AZIMUTH_MIN_VALUE, min(self::AZIMUTH_MAX_VALUE, self::toFloat($_value)));
+    }
+
+    /* Une hauteur minimale de soleil, en degrés au-dessus de l'horizon. */
+    public static function cleanElevation($_value) {
+        return max(self::ELEVATION_MIN_VALUE, min(self::ELEVATION_MAX_VALUE, self::toFloat($_value)));
+    }
+
+    /* La virgule décimale des francophones, que (float) couperait en silence :
+     * « 22,5 » deviendrait 22 et l'azimut serait faux d'un demi-degré sans que
+     * rien ne le signale. */
+    public static function toFloat($_value) {
         if (is_string($_value)) {
             $_value = str_replace(',', '.', trim($_value));
         }
-        $value = (float) $_value;
-        return max(self::TEMP_MIN_VALUE, min(self::TEMP_MAX_VALUE, $value));
+        return (float) $_value;
     }
 
     /* « 7:5 », « 07h05 », « 0705 » — tout ce qu'un humain tape pour une heure,
@@ -219,6 +318,139 @@ class voletautobeSun {
     }
 
     /*
+     * La condition de soleil d'un moment, évaluée sur une position du soleil.
+     *
+     * Rend array('met' => bool, 'known' => bool, 'reason' => string) où reason
+     * vaut 'none', 'unknown', 'ok', 'azimuth_out' ou 'too_low'.
+     *
+     * Une position inconnue se traite exactement comme une sonde muette, et
+     * pour la même raison : on bouge quand même. Le cas se produit quand la
+     * position de l'installation n'est pas renseignée — sans latitude ni
+     * longitude, le calcul porterait sur le golfe de Guinée. Si « on ne sait
+     * pas » empêchait le mouvement, la protection solaire ne se jouerait
+     * jamais et rien, dans l'interface, ne dirait pourquoi. La condition est
+     * un raffinement ; le mouvement est le comportement normal.
+     *
+     * Avec un déclencheur de façade, il n'y a plus rien à filtrer du tout : la
+     * raison est écrite à l'endroit du test.
+     */
+    public static function sunCheck($_slot, $_azimuth, $_elevation) {
+        $slot = self::cleanSlot($_slot);
+        if ($slot['sun_mode'] == self::SUN_NONE) {
+            return array('met' => true, 'known' => true, 'reason' => 'none');
+        }
+        /*
+         * Quand c'est la façade elle-même qui déclenche le moment, la condition
+         * de soleil n'a plus rien à filtrer : elle est vraie par construction,
+         * et c'est ici que disparaît la dernière trace du doublon.
+         *
+         * Le déclencheur ne vise plus un azimut mais l'intervalle de la journée
+         * où le soleil est sur la façade — azimut dans la fenêtre *et* hauteur
+         * au-dessus du seuil. Les deux moitiés de la condition sont donc déjà
+         * garanties à la seconde où le moment tombe : les retester, c'est au
+         * mieux répondre « oui » à une question déjà tranchée, au pire jouer le
+         * moment à pile ou face. Car la dichotomie s'arrête à la seconde près,
+         * et le soleil se retrouve aussi bien un millième de degré en deçà de
+         * la limite qu'au-delà : un « soleil hors de la fenêtre », ou un
+         * « soleil trop bas », un jour sur deux, sur un réglage parfaitement
+         * juste, sans rien dans l'interface pour l'expliquer. La fin de
+         * protection, elle, serait sautée tous les jours — au moment où le
+         * soleil quitte la façade, il n'y est par définition plus, ni par
+         * l'azimut, ni par la hauteur, ni parce qu'il se couche.
+         *
+         * La position n'est même pas regardée : il n'y a pas de « on ne sait
+         * pas » à noter quand il n'y a rien à savoir.
+         */
+        if (self::isFacadeMode($slot['mode'])) {
+            return array('met' => true, 'known' => true, 'reason' => 'none');
+        }
+        if ($_azimuth === null || $_elevation === null) {
+            return array('met' => true, 'known' => false, 'reason' => 'unknown');
+        }
+
+        /*
+         * La hauteur se teste avant l'azimut. Un soleil sous l'horizon a un
+         * azimut parfaitement défini et parfaitement hors sujet : annoncer
+         * « soleil hors de la fenêtre » à minuit, alors que la vraie raison
+         * est qu'il fait nuit, envoie l'utilisateur corriger une fenêtre qui
+         * n'a rien de faux. « Trop bas » est la raison utile.
+         */
+        if ((float) $_elevation < $slot['sun_elevation']) {
+            return array('met' => false, 'known' => true, 'reason' => 'too_low');
+        }
+        if (!self::azimuthInWindow($_azimuth, $slot['sun_from'], $slot['sun_to'])) {
+            return array('met' => false, 'known' => true, 'reason' => 'azimuth_out');
+        }
+        return array('met' => true, 'known' => true, 'reason' => 'ok');
+    }
+
+    /* Le moment est-il déclenché par la façade du groupe ? Les deux modes se
+     * traitent ensemble partout — ils ne diffèrent que par l'azimut visé — et
+     * l'appelant a lui aussi à les distinguer des heures et du soleil. */
+    public static function isFacadeMode($_mode) {
+        return ($_mode == self::MODE_FACADE_IN || $_mode == self::MODE_FACADE_OUT);
+    }
+
+    /*
+     * Un azimut est-il dans la fenêtre d'une façade ?
+     *
+     * La fenêtre passe par le nord quand le début est après la fin. « De 300°
+     * à 30° » est une façade nord-ouest–nord-est, et un simple
+     * « from <= a && a <= to » la rendrait toujours vide : la condition ne
+     * serait jamais remplie, le moment ne partirait plus, et le réglage aurait
+     * pourtant l'air juste dans l'interface.
+     *
+     * Un début égal à la fin est une fenêtre vide, donc jamais remplie, et non
+     * « tout le tour » : quelqu'un qui tape deux fois le même azimut a fait
+     * une erreur de saisie, et fermer les volets à toute heure du jour serait
+     * la pire façon de la lui apprendre.
+     */
+    public static function azimuthInWindow($_azimuth, $_from, $_to) {
+        $azimuth = self::normalizeAngle($_azimuth);
+        $from    = self::cleanAzimuth($_from);
+        $to      = self::cleanAzimuth($_to);
+        if ($from == $to) {
+            return false;
+        }
+        if ($from < $to) {
+            return ($azimuth >= $from && $azimuth <= $to);
+        }
+        return ($azimuth >= $from || $azimuth <= $to);
+    }
+
+    /* « sud », « sud-sud-ouest », « ouest-nord-ouest »… Le nom du secteur de
+     * 22,5° où tombe un azimut : c'est ce que l'utilisateur peut vérifier
+     * depuis sa fenêtre, alors que « 200° » ne se vérifie pas. */
+    public static function compassName($_azimuth) {
+        $azimuth = self::normalizeAngle($_azimuth);
+        return self::$_compass[((int) round($azimuth / 22.5)) % 16];
+    }
+
+    /* Un angle ramené dans 0..360. */
+    public static function normalizeAngle($_angle) {
+        $angle = fmod(self::toFloat($_angle), 360.0);
+        return ($angle < 0) ? $angle + 360.0 : $angle;
+    }
+
+    /*
+     * L'écart entre deux azimuts, ramené dans −180..180.
+     *
+     * Le soleil passe de 359° à 1° sans reculer de 358° : c'est la seule
+     * arithmétique correcte sur un cadran, et l'oublier ferait croire au
+     * balayage qu'il a franchi tous les azimuts d'un coup.
+     */
+    public static function angleDifference($_from, $_to) {
+        $delta = fmod(self::toFloat($_to) - self::toFloat($_from), 360.0);
+        if ($delta > 180.0) {
+            $delta -= 360.0;
+        }
+        if ($delta < -180.0) {
+            $delta += 360.0;
+        }
+        return $delta;
+    }
+
+    /*
      * Lever et coucher du soleil pour le jour d'un horodatage.
      *
      * date_sun_info() est dans PHP depuis la version 5.1 : aucune dépendance à
@@ -252,6 +484,368 @@ class voletautobeSun {
     }
 
     /*
+     * Où est le soleil à un instant donné.
+     *
+     * Rend array('azimuth' => float, 'elevation' => float), ou deux null si le
+     * calcul n'aboutit pas. L'azimut compte de 0 à 360 depuis le nord, dans le
+     * sens des aiguilles d'une montre — 0 nord, 90 est, 180 sud, 270 ouest :
+     * c'est la convention de tout ce qui parle d'orientation de façade, et la
+     * seule que l'utilisateur puisse vérifier avec une boussole. L'élévation
+     * est la hauteur au-dessus de l'horizon, négative la nuit.
+     *
+     * L'algorithme est celui du NOAA Solar Calculator, en PHP pur : la classe
+     * ne connaît ni Jeedom, ni réseau, ni bibliothèque d'éphémérides, et le
+     * jeu d'essai peut donc la confronter hors ligne aux valeurs publiées.
+     *
+     * Deux précautions qui ne lèvent aucune erreur quand on les oublie :
+     *
+     * - tout se calcule en UTC, jamais en heure locale. La box est réglée sur
+     *   Europe/Brussels ; un calcul fait en heure murale se décalerait d'une
+     *   heure du dernier dimanche de mars au dernier d'octobre, la protection
+     *   solaire partirait une heure trop tard tout l'été, et personne ne
+     *   ferait le lien avec le changement d'heure ;
+     * - la réfraction atmosphérique est corrigée, sans quoi la hauteur rendue
+     *   ne serait pas celle des éphémérides ni celle que l'on voit : au ras de
+     *   l'horizon l'écart vaut plus d'un demi-degré, c'est-à-dire tout le
+     *   diamètre du soleil.
+     */
+    public static function sunPosition($_timestamp, $_latitude, $_longitude) {
+        $unknown = array('azimuth' => null, 'elevation' => null);
+        /* La chaîne vide compte comme une position absente : une configuration
+         * Jeedom non renseignée arrive ainsi, et (float) '' vaut zéro — c'est
+         * le golfe de Guinée, une position parfaitement valide qui rendrait un
+         * azimut faux au lieu de dire qu'on ne sait pas, et la fenêtre de
+         * soleil filtrerait alors sur un soleil imaginaire. */
+        if ($_timestamp === null || $_latitude === null || $_longitude === null
+            || $_latitude === '' || $_longitude === '') {
+            return $unknown;
+        }
+        $timestamp = (int) $_timestamp;
+        $latitude  = (float) $_latitude;
+        $longitude = (float) $_longitude;
+        if ($latitude < -90 || $latitude > 90 || $longitude < -180 || $longitude > 180) {
+            return $unknown;
+        }
+
+        $jd = $timestamp / 86400.0 + 2440587.5;
+        $t  = ($jd - 2451545.0) / 36525.0;
+
+        $l0 = self::normalizeAngle(280.46646 + $t * (36000.76983 + $t * 0.0003032));
+        $m  = 357.52911 + $t * (35999.05029 - 0.0001537 * $t);
+        $e  = 0.016708634 - $t * (0.000042037 + 0.0000001267 * $t);
+
+        $centre = sin(deg2rad($m)) * (1.914602 - $t * (0.004817 + 0.000014 * $t))
+                + sin(deg2rad(2 * $m)) * (0.019993 - 0.000101 * $t)
+                + sin(deg2rad(3 * $m)) * 0.000289;
+
+        /* Longitude apparente : la nutation et l'aberration valent moins d'un
+         * centième de degré, mais elles ne coûtent rien et gardent le calcul
+         * comparable aux éphémérides publiées. */
+        $lambda = $l0 + $centre - 0.00569 - 0.00478 * sin(deg2rad(125.04 - 1934.136 * $t));
+
+        $eps0 = 23 + (26 + (21.448 - $t * (46.815 + $t * (0.00059 - $t * 0.001813))) / 60) / 60;
+        $eps  = $eps0 + 0.00256 * cos(deg2rad(125.04 - 1934.136 * $t));
+
+        $declination = asin(sin(deg2rad($eps)) * sin(deg2rad($lambda)));
+
+        /* L'équation du temps, en minutes : l'écart entre le soleil vrai et le
+         * soleil moyen, jusqu'à un quart d'heure en novembre. L'ignorer
+         * décalerait le midi solaire d'autant, et l'azimut de près de 4°. */
+        $y = pow(tan(deg2rad($eps / 2)), 2);
+        $equationOfTime = 4 * rad2deg(
+            $y * sin(2 * deg2rad($l0))
+            - 2 * $e * sin(deg2rad($m))
+            + 4 * $e * $y * sin(deg2rad($m)) * cos(2 * deg2rad($l0))
+            - 0.5 * $y * $y * sin(4 * deg2rad($l0))
+            - 1.25 * $e * $e * sin(2 * deg2rad($m))
+        );
+
+        /* gmdate() et non date() : les minutes écoulées dans la journée se
+         * comptent en UTC, quel que soit le fuseau de la box. */
+        $minutes = (int) gmdate('H', $timestamp) * 60 + (int) gmdate('i', $timestamp)
+                 + (int) gmdate('s', $timestamp) / 60.0;
+
+        $trueSolarTime = $minutes + $equationOfTime + 4 * $longitude;
+        $hourAngle     = $trueSolarTime / 4 - 180;
+
+        $latitudeR = deg2rad($latitude);
+        $cosZenith = sin($latitudeR) * sin($declination)
+                   + cos($latitudeR) * cos($declination) * cos(deg2rad($hourAngle));
+        /* Les arrondis flottants peuvent sortir d'un cheveu de −1..1, et
+         * acos() rendrait alors NAN — un NAN qui se propagerait jusqu'à la
+         * tuile sans jamais lever d'erreur. */
+        $cosZenith = max(-1.0, min(1.0, $cosZenith));
+        $zenith    = acos($cosZenith);
+
+        $denominator = cos($latitudeR) * sin($zenith);
+        if (abs($denominator) < 1e-9) {
+            /* Au pôle exact, ou soleil au zénith exact : l'azimut n'existe
+             * pas. Une position sans azimut n'oriente aucune façade, on la
+             * rend inconnue entière plutôt que moitié juste. */
+            return $unknown;
+        }
+        $azimuth = rad2deg(acos(max(-1.0, min(1.0, (sin($latitudeR) * $cosZenith - sin($declination)) / $denominator))));
+        /* acos() ne rend que 0..180 : l'angle horaire dit de quel côté du
+         * méridien on se trouve, et c'est lui qui distingue le matin du soir.
+         * Sans ce repliement, tous les après-midi seraient rendus comme des
+         * matins et une façade ouest ne serait jamais protégée. */
+        $azimuth = ($hourAngle > 0) ? self::normalizeAngle($azimuth + 180) : self::normalizeAngle(540 - $azimuth);
+
+        $elevation = 90 - rad2deg($zenith);
+        return array('azimuth' => $azimuth, 'elevation' => $elevation + self::refraction($elevation));
+    }
+
+    /*
+     * La correction de réfraction atmosphérique, en degrés, pour une hauteur
+     * géométrique donnée. Formule du NOAA, qui rend des secondes d'arc.
+     *
+     * L'atmosphère relève le soleil : au ras de l'horizon il paraît 0,57° plus
+     * haut qu'il n'est, soit plus que son propre diamètre. C'est ce qui fait
+     * que le soleil « se couche » alors qu'il est déjà géométriquement sous
+     * l'horizon, et c'est pourquoi la hauteur rendue au lever calculé par
+     * date_sun_info() doit valoir zéro et non −0,6°.
+     */
+    public static function refraction($_elevation) {
+        $elevation = (float) $_elevation;
+        if ($elevation > 85) {
+            return 0.0;
+        }
+        $tangent = tan(deg2rad($elevation));
+        if ($elevation > 5) {
+            $seconds = 58.1 / $tangent - 0.07 / pow($tangent, 3) + 0.000086 / pow($tangent, 5);
+        } elseif ($elevation > -0.575) {
+            $seconds = 1735 + $elevation * (-518.2 + $elevation * (103.4 + $elevation * (-12.79 + $elevation * 0.711)));
+        } else {
+            $seconds = -20.772 / $tangent;
+        }
+        return $seconds / 3600.0;
+    }
+
+    /*
+     * L'instant du jour où le soleil atteint un azimut, ou null s'il ne
+     * l'atteint jamais au-dessus de l'horizon ce jour-là.
+     *
+     * Ce n'est plus ce que visent les modes de façade — le soleil quitte une
+     * façade aussi bien en tournant qu'en descendant, et c'est facadeWindow()
+     * qui en tient compte — mais la question « à quelle heure le soleil
+     * passe-t-il au 200° ? » garde un sens à elle seule, et la réponse se lit
+     * dans l'aperçu.
+     *
+     * On ne cherche qu'entre le lever et le coucher : un azimut franchi sous
+     * l'horizon n'éclaire aucune façade, et le retenir ferait fermer les
+     * volets en pleine nuit. Le cas « jamais » est parfaitement normal — un
+     * azimut de 90° n'est pas atteint à Bruxelles en décembre, le soleil s'y
+     * lève déjà au 129° — et il doit rendre null franchement, surtout pas se
+     * replier sur minuit ou sur le lever, ce qui jouerait le moment tous les
+     * jours de l'hiver à contretemps.
+     *
+     * La méthode est un balayage de dix minutes pour trouver l'intervalle où
+     * l'azimut franchit la consigne, puis une dichotomie pour descendre à la
+     * seconde. Il n'existe pas de formule directe, et aucune n'est nécessaire :
+     * vingt itérations sur un calcul de cette taille ne se mesurent pas.
+     */
+    public static function azimuthTime($_azimuth, $_dayTimestamp, $_latitude, $_longitude) {
+        $target = self::cleanAzimuth($_azimuth);
+        $sun    = self::sun($_dayTimestamp, $_latitude, $_longitude);
+        if ($sun['sunrise'] === null || $sun['sunset'] === null || $sun['sunset'] <= $sun['sunrise']) {
+            return null;
+        }
+
+        $step        = 600;
+        $start       = null;
+        $end         = null;
+        $startDelta  = 0;
+        $from        = $sun['sunrise'];
+        $azimuthFrom = self::sunPosition($from, $_latitude, $_longitude);
+        while ($from < $sun['sunset'] && $azimuthFrom['azimuth'] !== null) {
+            $to        = min($from + $step, $sun['sunset']);
+            $azimuthTo = self::sunPosition($to, $_latitude, $_longitude);
+            if ($azimuthTo['azimuth'] === null) {
+                return null;
+            }
+            /* Course parcourue sur l'intervalle, et distance qui sépare son
+             * début de la consigne : les deux ramenées dans −180..180, sans
+             * quoi un intervalle qui enjambe le 360° paraîtrait couvrir tout
+             * le tour du cadran et happerait n'importe quelle consigne. */
+            $travel = self::angleDifference($azimuthFrom['azimuth'], $azimuthTo['azimuth']);
+            $offset = self::angleDifference($azimuthFrom['azimuth'], $target);
+            if (($travel > 0 && $offset >= 0 && $offset <= $travel)
+                || ($travel < 0 && $offset <= 0 && $offset >= $travel)) {
+                $start      = $from;
+                $end        = $to;
+                $startDelta = $offset;
+                break;
+            }
+            $from        = $to;
+            $azimuthFrom = $azimuthTo;
+        }
+        if ($start === null) {
+            return null;
+        }
+        /* L'écart au début de l'intervalle donne le signe de référence : on
+         * garde à chaque pas la moitié où il change, c'est-à-dire celle qui
+         * contient encore l'instant cherché. */
+        if ($startDelta == 0) {
+            return $start;
+        }
+        for ($iteration = 0; $iteration < 20 && ($end - $start) > 1; $iteration++) {
+            $middle   = (int) floor(($start + $end) / 2);
+            $position = self::sunPosition($middle, $_latitude, $_longitude);
+            if ($position['azimuth'] === null) {
+                break;
+            }
+            $delta = self::angleDifference($position['azimuth'], $target);
+            if ($delta == 0) {
+                return $middle;
+            }
+            if (($delta > 0) === ($startDelta > 0)) {
+                $start      = $middle;
+                $startDelta = $delta;
+            } else {
+                $end = $middle;
+            }
+        }
+        return $end;
+    }
+
+    /*
+     * Le soleil est-il sur la façade à cet instant précis ?
+     *
+     * Les deux moitiés comptent, et l'oubli de la seconde est le défaut que
+     * cette version corrige : le soleil est sur la façade quand son azimut est
+     * dans la fenêtre *et* qu'il est assez haut pour l'éclairer. Un soleil au
+     * 250° mais à 3° de hauteur passe derrière les maisons d'en face ; il n'est
+     * pas plus « sur la façade » qu'un soleil au nord.
+     *
+     * Une position que le calcul ne sait pas rendre — le pôle exact, le zénith
+     * exact — compte comme « pas sur la façade » : une façade ne s'oriente pas
+     * sans azimut, et le cas ne se produit à aucune latitude habitée.
+     */
+    public static function onFacade($_timestamp, $_slot, $_latitude, $_longitude) {
+        $slot     = self::cleanSlot($_slot);
+        $position = self::sunPosition($_timestamp, $_latitude, $_longitude);
+        if ($position['azimuth'] === null || $position['elevation'] === null) {
+            return false;
+        }
+        return (self::azimuthInWindow($position['azimuth'], $slot['sun_from'], $slot['sun_to'])
+                && $position['elevation'] >= $slot['sun_elevation']);
+    }
+
+    /*
+     * L'intervalle de la journée pendant lequel le soleil est sur la façade.
+     *
+     * Rend array('in' => ..., 'out' => ...), deux horodatages, ou deux null si
+     * le soleil n'y est à aucun moment du jour. C'est de là que viennent les
+     * deux modes de façade : l'arrivée lit « in », le départ lit « out ».
+     *
+     * Le modèle est celui du soleil qui tourne *et* qui monte, et c'est tout
+     * l'objet de cette méthode. Viser l'azimut de fin, comme on le faisait
+     * d'abord, laisse la fin de protection sans date la moitié de l'année —
+     * pire, à 50,5° de latitude le soleil ne se couche jamais au-delà du 310°,
+     * si bien que la façade livrée par défaut, qui va jusqu'au 315°, n'était
+     * quittée *aucun jour de l'année* et ne rouvrait jamais les volets. Le
+     * soleil quitte une façade de trois façons : il en sort par le côté, il
+     * descend sous la hauteur qui l'éclaire encore, ou il se couche. La
+     * première des trois qui survient est le départ.
+     *
+     * La méthode est celle d'azimuthTime(), appliquée au prédicat entier :
+     * balayage de dix minutes du lever au coucher pour situer les deux
+     * changements d'état, puis dichotomie à la seconde. Dix minutes suffisent
+     * parce que le soleil ne traverse pas une façade en dix minutes — la plus
+     * courte des fenêtres réelles, celle d'un solstice d'hiver contre une
+     * hauteur minimale, dure encore une heure et demie.
+     *
+     * Le premier intervalle commence au lever : un soleil déjà dans la fenêtre
+     * en se levant y arrive à l'heure du lever, et non dix minutes plus tard.
+     * Et si le soleil est encore sur la façade au coucher, c'est le coucher qui
+     * l'en fait partir.
+     */
+    public static function facadeWindow($_slot, $_dayTimestamp, $_latitude, $_longitude) {
+        $slot  = self::cleanSlot($_slot);
+        $empty = array('in' => null, 'out' => null);
+        $sun   = self::sun($_dayTimestamp, $_latitude, $_longitude);
+        if ($sun['sunrise'] === null || $sun['sunset'] === null || $sun['sunset'] <= $sun['sunrise']) {
+            return $empty;
+        }
+        $step = 600;
+
+        /* L'arrivée. On avance jusqu'au premier instant balayé où le soleil est
+         * sur la façade, en gardant le précédent, qui n'y était pas : le
+         * changement d'état est entre les deux. */
+        $before = null;
+        $inside = null;
+        $time   = $sun['sunrise'];
+        while (true) {
+            if (self::onFacade($time, $slot, $_latitude, $_longitude)) {
+                $inside = $time;
+                break;
+            }
+            $before = $time;
+            if ($time >= $sun['sunset']) {
+                break;
+            }
+            $time = min($time + $step, $sun['sunset']);
+        }
+        if ($inside === null) {
+            /* Le soleil n'est sur cette façade à aucun moment du jour. Le cas
+             * est parfaitement normal — une façade est en décembre, une hauteur
+             * minimale que le soleil n'atteint pas — et il doit rendre null
+             * franchement, surtout pas se replier sur minuit ou sur le lever,
+             * ce qui jouerait le moment tous les jours de l'hiver à
+             * contretemps. */
+            return $empty;
+        }
+        $in = ($before === null)
+            ? $inside
+            : self::facadeTransition($before, $inside, $slot, $_latitude, $_longitude);
+
+        /* Le départ, cherché à partir de l'arrivée : c'est le premier instant
+         * où le soleil n'est plus sur la façade, quelle que soit celle des
+         * trois raisons qui l'emporte. */
+        $last  = $inside;
+        $after = null;
+        $time  = $inside;
+        while ($time < $sun['sunset']) {
+            $time = min($time + $step, $sun['sunset']);
+            if (!self::onFacade($time, $slot, $_latitude, $_longitude)) {
+                $after = $time;
+                break;
+            }
+            $last = $time;
+        }
+        $out = ($after === null)
+            ? $sun['sunset']
+            : self::facadeTransition($last, $after, $slot, $_latitude, $_longitude);
+
+        return array('in' => $in, 'out' => $out);
+    }
+
+    /*
+     * L'instant, à la seconde, où le soleil change d'état entre deux instants
+     * qui l'encadrent : l'un le voit sur la façade, l'autre non.
+     *
+     * Rend le premier instant qui porte l'état de $_to — celui de l'arrivée
+     * quand on encadre une arrivée, celui du départ quand on encadre un
+     * départ. Dix itérations suffisent à descendre de dix minutes à la seconde,
+     * et il n'existe pas de formule directe : la hauteur et l'azimut se
+     * croisent selon la latitude et le jour.
+     */
+    public static function facadeTransition($_from, $_to, $_slot, $_latitude, $_longitude) {
+        $from   = (int) $_from;
+        $to     = (int) $_to;
+        $target = self::onFacade($to, $_slot, $_latitude, $_longitude);
+        while (($to - $from) > 1) {
+            $middle = (int) floor(($from + $to) / 2);
+            if (self::onFacade($middle, $_slot, $_latitude, $_longitude) === $target) {
+                $to = $middle;
+            } else {
+                $from = $middle;
+            }
+        }
+        return $to;
+    }
+
+    /*
      * L'horodatage du moment pour un jour donné, ou null s'il n'y a rien ce
      * jour-là : jour de semaine décoché, ou soleil qui ne se couche pas.
      *
@@ -278,6 +872,21 @@ class voletautobeSun {
             if ($timestamp === false) {
                 return null;
             }
+        } elseif (self::isFacadeMode($slot['mode'])) {
+            /* Le soleil arrive sur la façade et il la quitte : les deux modes
+             * lisent les deux bornes du même intervalle, celui que la façade du
+             * groupe découpe dans la journée. Ils ne diffèrent que par la borne
+             * lue, et l'orientation vient du groupe. */
+            $window    = self::facadeWindow($slot, $_dayTimestamp, $_latitude, $_longitude);
+            $timestamp = ($slot['mode'] == self::MODE_FACADE_IN) ? $window['in'] : $window['out'];
+            if ($timestamp === null) {
+                return null;
+            }
+            /* Le décalage a autant de sens ici qu'au coucher du soleil, et il
+             * en a même un très concret : « 20 minutes après que le soleil
+             * arrive sur la façade », c'est le temps qu'il faut à celle-ci pour
+             * chauffer. */
+            $timestamp += $slot['offset'] * 60;
         } else {
             $sun = self::sun($_dayTimestamp, $_latitude, $_longitude);
             if ($sun[$slot['mode']] === null) {

@@ -20,15 +20,22 @@ require_once __DIR__ . '/voletautobeSun.class.php';
 require_once __DIR__ . '/voletautobeVolets.class.php';
 
 /*
- * Un équipement = un groupe de volets et trois moments : le matin, la
- * protection solaire, le soir.
+ * Un équipement = un groupe de volets et quatre moments : le matin, la
+ * protection solaire, la fin de protection, le soir.
  *
  * Ce découpage est le plugin tout entier. On aurait pu faire un équipement par
  * ordre — « ouverture du salon », « fermeture du salon » — mais il faudrait
- * alors choisir trois fois les mêmes volets, et les trois moitiés d'une même
- * intention pourraient diverger sans qu'on le voie. Un groupe, trois moments :
+ * alors choisir quatre fois les mêmes volets, et les quatre quarts d'une même
+ * intention pourraient diverger sans qu'on le voie. Un groupe, quatre moments :
  * ce que l'utilisateur ouvre le matin est exactement ce qu'il ferme le soir,
  * par construction.
+ *
+ * Un groupe rassemble les volets d'une pièce ou d'une façade, et c'est pour
+ * cela que l'orientation appartient au groupe et non au moment : le soleil
+ * arrive sur la façade et la quitte aux mêmes azimuts pour la protection
+ * solaire, pour sa fin et pour toute condition posée. Écrite une fois dans la
+ * configuration de l'équipement, elle ne peut plus se contredire d'un moment à
+ * l'autre.
  *
  * La nouveauté par rapport au plugin des lampes tient en une phrase : un volet
  * ne se commande pas seulement à l'heure, il se commande aussi à la
@@ -43,9 +50,28 @@ require_once __DIR__ . '/voletautobeVolets.class.php';
  */
 class voletautobe extends eqLogic {
 
-    /* Les trois moments. Les noms sont ceux de la configuration, l'interface
-     * les appelle « Le matin », « Le soir » et « Protection solaire ». */
-    const SLOTS = array('morning', 'evening', 'heat');
+    /*
+     * Les quatre moments, dans l'ordre de la journée.
+     *
+     * Les noms sont ceux de la configuration, l'interface les appelle « Le
+     * matin », « Protection solaire », « Fin de protection » et « Le soir ».
+     * L'ordre de cette liste est celui de tout ce qui s'affiche — les blocs de
+     * la page, les aperçus, la réponse AJAX — et une journée se lit du matin au
+     * soir : un moment rangé au mauvais endroit se cherche.
+     */
+    const SLOTS = array('morning', 'heat', 'shade_end', 'evening');
+
+    /*
+     * La façade du groupe, quand elle n'a jamais été réglée.
+     *
+     * Sud-est à nord-ouest en passant par le sud : la moitié du ciel où le
+     * soleil chauffe vraiment sous nos latitudes. Et 15° de hauteur — plus bas,
+     * le soleil rase, il passe derrière les maisons d'en face et ne justifie
+     * plus de fermer quoi que ce soit.
+     */
+    const DEFAULT_FACADE_FROM      = 135.0;
+    const DEFAULT_FACADE_TO        = 315.0;
+    const DEFAULT_FACADE_ELEVATION = 15.0;
 
     /* Retard au-delà duquel un ordre manqué n'est plus joué. Une box redémarrée
      * à 3 h du matin ne doit pas rattraper la fermeture de 21 h. Réglable dans
@@ -141,7 +167,19 @@ class voletautobe extends eqLogic {
 
     public function preSave() {
         /*
-         * Les trois moments arrivent du formulaire tels que le JS les a
+         * La façade d'abord, les moments ensuite, et l'ordre n'est pas
+         * indifférent : slotConfig() recopie la façade dans chaque moment, et
+         * la lirait encore sous sa forme brute — « 135 » entre guillemets, ou
+         * la chaîne vide d'un champ effacé — si elle n'était pas déjà
+         * normalisée ici.
+         */
+        $facade = $this->facade();
+        $this->setConfiguration('facade_from', $facade['from']);
+        $this->setConfiguration('facade_to', $facade['to']);
+        $this->setConfiguration('facade_elevation', $facade['elevation']);
+
+        /*
+         * Les quatre moments arrivent du formulaire tels que le JS les a
          * ramassés : c'est ici, et pas à l'exécution, qu'on leur impose une
          * forme. Une case à cocher absente vaut « 0 » et non « clé manquante »,
          * un décalage vaut un entier et non « 30 » entre guillemets, et une
@@ -231,10 +269,10 @@ class voletautobe extends eqLogic {
     /* ============================================================== COMMANDES */
 
     /*
-     * Seize commandes, dont quatre visibles.
+     * Dix-neuf commandes, dont quatre visibles.
      *
      * Le reste sert aux scénarios et à l'historique, et reste masqué : une
-     * tuile de tableau de bord qui empile seize widgets ne se lit plus.
+     * tuile de tableau de bord qui empile dix-neuf widgets ne se lit plus.
      * L'utilisateur réaffiche ce qu'il veut, c'est une décision qui lui
      * appartient — mais elle ne doit pas lui être imposée à l'installation.
      *
@@ -284,6 +322,9 @@ class voletautobe extends eqLogic {
             array('logicalId' => 'nextHeat', 'name' => __('Prochaine protection', __FILE__),
                   'type' => 'info', 'subType' => 'string', 'generic' => '',
                   'visible' => 0, 'icon' => ''),
+            array('logicalId' => 'nextShadeEnd', 'name' => __('Prochaine fin de protection', __FILE__),
+                  'type' => 'info', 'subType' => 'string', 'generic' => '',
+                  'visible' => 0, 'icon' => ''),
             array('logicalId' => 'nextEvening', 'name' => __('Prochain soir', __FILE__),
                   'type' => 'info', 'subType' => 'string', 'generic' => '',
                   'visible' => 0, 'icon' => ''),
@@ -292,6 +333,15 @@ class voletautobe extends eqLogic {
                   'visible' => 0, 'icon' => ''),
             array('logicalId' => 'sunset', 'name' => __('Coucher du soleil', __FILE__),
                   'type' => 'info', 'subType' => 'string', 'generic' => '',
+                  'visible' => 0, 'icon' => ''),
+            /* La position du soleil n'est pas historisée : c'est un calcul
+             * déterministe, et l'archiver reviendrait à stocker une table
+             * d'éphémérides que l'on sait refaire à la demande. */
+            array('logicalId' => 'azimuth', 'name' => __('Azimut du soleil', __FILE__),
+                  'type' => 'info', 'subType' => 'numeric', 'generic' => '',
+                  'visible' => 0, 'icon' => ''),
+            array('logicalId' => 'elevation', 'name' => __('Hauteur du soleil', __FILE__),
+                  'type' => 'info', 'subType' => 'numeric', 'generic' => '',
                   'visible' => 0, 'icon' => ''),
         );
 
@@ -354,7 +404,7 @@ class voletautobe extends eqLogic {
      * voir avec désactiver l'équipement : celui-ci sort alors du tableau de
      * bord, ses boutons ne répondent plus et ses commandes disparaissent des
      * scénarios. Un groupe suspendu, lui, reste entier — on peut toujours
-     * ouvrir à la main — mais ses trois moments se taisent.
+     * ouvrir à la main — mais ses quatre moments se taisent.
      *
      * L'état est enregistré en base et non en cache : un cache vidé rendrait la
      * programmation au matin suivant, et les volets s'ouvriraient sur une
@@ -383,13 +433,15 @@ class voletautobe extends eqLogic {
 
     /* ============================================================ PROGRAMMATION */
 
-    /* L'action naturelle d'un moment : le matin on ouvre, le soir on ferme, et
-     * la protection solaire descend à une hauteur choisie. C'est seulement le
-     * défaut — rien n'empêche de fermer le matin une chambre exposée à l'est. */
+    /* L'action naturelle d'un moment : le matin on ouvre, le soir on ferme, la
+     * protection solaire descend à une hauteur choisie et sa fin rouvre. C'est
+     * seulement le défaut — rien n'empêche de fermer le matin une chambre
+     * exposée à l'est. */
     public static function slotAction($_key) {
         switch ($_key) {
-            case 'morning': return voletautobeSun::ACTION_UP;
-            case 'heat':    return voletautobeSun::ACTION_POSITION;
+            case 'morning':   return voletautobeSun::ACTION_UP;
+            case 'shade_end': return voletautobeSun::ACTION_UP;
+            case 'heat':      return voletautobeSun::ACTION_POSITION;
         }
         return voletautobeSun::ACTION_DOWN;
     }
@@ -397,46 +449,115 @@ class voletautobe extends eqLogic {
     /*
      * Le réglage d'un moment à la création d'un groupe.
      *
-     * Un plugin qui se crée entièrement vide donne trois moments désactivés à
+     * Un plugin qui se crée entièrement vide donne quatre moments désactivés à
      * 07:00, et l'utilisateur doit tout régler avant de comprendre ce que le
      * plugin sait faire. Ces valeurs-là racontent l'usage : le matin au lever
      * du soleil mais pas avant 7 h (en juin le soleil se lève à 5 h 30, et
      * personne ne veut ses volets ouverts à 5 h 30), le soir au coucher mais
      * pas avant 18 h (en décembre il se couche à 16 h 40, fermer à 16 h 40 est
-     * trop tôt), et la protection solaire à 13 h, désactivée, réglée sur
-     * « seulement si ≥ 26 °C » pour qu'il ne reste qu'à cocher la case.
+     * trop tôt), et la paire protection solaire / fin de protection calée sur
+     * la façade du groupe, désactivée, réglée sur « seulement si ≥ 26 °C » pour
+     * qu'il ne reste qu'à cocher la case.
      */
     public static function defaultSlot($_key) {
         $slot = voletautobeSun::emptySlot(self::slotAction($_key));
         switch ($_key) {
             case 'morning':
+                $slot['enable'] = 1;
                 $slot['mode'] = voletautobeSun::MODE_SUNRISE;
                 $slot['not_before'] = '07:00';
                 break;
             case 'evening':
+                $slot['enable'] = 1;
                 $slot['mode'] = voletautobeSun::MODE_SUNSET;
                 $slot['not_before'] = '18:00';
                 break;
             case 'heat':
-                $slot['mode'] = voletautobeSun::MODE_FIXED;
-                $slot['time'] = '13:00';
+                /*
+                 * Quand le soleil arrive sur la façade, et non à 13 h : c'est
+                 * tout l'objet de la protection solaire. Le 13 h qui convient
+                 * en juin laisse le soleil taper une heure de trop en août et
+                 * ne correspond à rien en octobre, alors que l'azimut d'arrivée
+                 * sur la façade est le même toute l'année.
+                 */
+                $slot['mode'] = voletautobeSun::MODE_FACADE_IN;
                 $slot['position'] = 30;
                 $slot['temp_mode'] = voletautobeSun::TEMP_MIN;
                 $slot['temp_value'] = 26.0;
+                /*
+                 * Aucune condition de soleil, alors même que ce moment est
+                 * celui qui parle le plus du soleil : son déclencheur est déjà
+                 * la façade, et un moment déclenché par la façade ne tombe que
+                 * lorsque le soleil y est, direction et hauteur comprises. La
+                 * cocher d'office livrerait un réglage qui ne fait rien, et
+                 * l'utilisateur passerait du temps à se demander lequel des
+                 * deux commande vraiment — c'est exactement la question qu'il
+                 * ne doit plus avoir à se poser.
+                 */
+                $slot['sun_mode'] = voletautobeSun::SUN_NONE;
+                break;
+            case 'shade_end':
+                $slot['mode'] = voletautobeSun::MODE_FACADE_OUT;
+                /* L'heure fixe ne sert que si l'utilisateur quitte le mode
+                 * façade, mais elle doit alors être plausible : emptySlot()
+                 * donne 07:00 pour une action d'ouverture, ce qui rouvrirait au
+                 * petit matin un moment qui existe pour rouvrir l'après-midi.
+                 * C'est aussi la valeur que pose le formulaire, et deux défauts
+                 * qui divergent finissent toujours par se voir. */
+                $slot['time'] = '17:00';
+                /*
+                 * Aucune condition de soleil ici, et c'est un piège à éviter
+                 * plutôt qu'un oubli : au moment où le soleil quitte la façade,
+                 * il n'y est par définition plus. Poser la fenêtre en condition
+                 * ferait donc échouer le contrôle à chaque fois et sauterait la
+                 * réouverture tous les jours — les volets resteraient à 30 %
+                 * jusqu'au soir, exactement ce que ce moment existe pour
+                 * éviter, et rien ne le dirait.
+                 */
+                $slot['sun_mode'] = voletautobeSun::SUN_NONE;
                 break;
         }
         return $slot;
     }
 
-    /* Le réglage normalisé d'un moment. Un groupe qui n'a jamais été enregistré
-     * n'a rien dans sa configuration : il reçoit les valeurs de départ, et non
-     * un moment vide. */
+    /*
+     * Le réglage normalisé d'un moment, façade du groupe comprise.
+     *
+     * C'est le point d'articulation de toute la façade : l'orientation s'écrit
+     * à un seul endroit — les trois clés de configuration de l'équipement — et
+     * s'injecte à un seul endroit, ici. voletautobeSun est une classe pure, qui
+     * ne connaît ni Jeedom ni équipement : elle doit recevoir la façade avec le
+     * moment, dans les champs sun_from, sun_to et sun_elevation de la forme
+     * normalisée. Ces trois champs ne viennent donc plus du formulaire, ils
+     * sont recopiés avant tout usage.
+     *
+     * Tout passe par ici : le déclenchement, la condition, l'aperçu, la phrase
+     * de résumé, le compte rendu de saut. Un chemin qui lirait le moment
+     * autrement travaillerait sur la façade par défaut — sud-est à nord-ouest —
+     * et fermerait les volets d'une maison orientée au nord-est sans qu'aucune
+     * erreur ne soit levée.
+     *
+     * Un groupe qui n'a jamais été enregistré n'a rien dans sa configuration :
+     * il reçoit les valeurs de départ, et non un moment vide.
+     */
     public function slotConfig($_key) {
         $stored = $this->getConfiguration($_key);
         if (!is_array($stored)) {
             $stored = self::defaultSlot($_key);
         }
-        return voletautobeSun::cleanSlot($stored, self::slotAction($_key));
+        return voletautobeSun::cleanSlot($this->withFacade($stored), self::slotAction($_key));
+    }
+
+    /* La façade du groupe recopiée dans un moment. Voir slotConfig() : c'est le
+     * seul endroit où l'orientation entre dans un réglage, et previewSlot() y
+     * passe aussi, parce que le formulaire ne l'envoie plus. */
+    public function withFacade($_slot) {
+        $slot = is_array($_slot) ? $_slot : array();
+        $facade = $this->facade();
+        $slot['sun_from']      = $facade['from'];
+        $slot['sun_to']        = $facade['to'];
+        $slot['sun_elevation'] = $facade['elevation'];
+        return $slot;
     }
 
     /* La graine du tirage aléatoire : propre à l'équipement et au moment, pour
@@ -500,12 +621,12 @@ class voletautobe extends eqLogic {
      * vingt secondes à descendre.
      *
      * La décision se prend une fois, à l'heure dite. Le moment est marqué joué
-     * AVANT que la condition de température ne soit évaluée, et il le reste
-     * même si la condition n'est pas remplie : sinon le cron, qui repasse
-     * chaque minute pendant tout le délai de rattrapage, réévaluerait la
-     * température à chaque passage. Un matin à 4,8 °C pour un seuil de 5 °C
-     * verrait donc les volets rester fermés à 7 h 00, puis partir tout seuls à
-     * 7 h 09 parce que le soleil a chauffé la sonde d'un dixième de degré.
+     * AVANT que ses conditions ne soient évaluées, et il le reste même si
+     * l'une d'elles n'est pas remplie : sinon le cron, qui repasse chaque
+     * minute pendant tout le délai de rattrapage, réévaluerait la température
+     * à chaque passage. Un matin à 4,8 °C pour un seuil de 5 °C verrait donc
+     * les volets rester fermés à 7 h 00, puis partir tout seuls à 7 h 09 parce
+     * que le soleil a chauffé la sonde d'un dixième de degré.
      * « Il fait trop froid ce matin » est une décision de la journée, pas une
      * mesure qu'on reprend de minute en minute.
      */
@@ -532,6 +653,33 @@ class voletautobe extends eqLogic {
         cache::set($doneKey, $due['day'], self::DONE_MEMORY);
 
         /*
+         * La condition de soleil, sur la position de l'instant.
+         *
+         * Elle s'évalue avant celle de température, et l'ordre se lit dans le
+         * compte rendu : une protection solaire un jour couvert à 27 °C ne doit
+         * pas être annoncée comme sautée parce qu'il fait trop chaud alors que
+         * la vraie raison est que le soleil n'est pas sur cette façade. C'est
+         * aussi la plus fréquente des deux : la température passe le seuil tous
+         * les jours d'un même épisode de chaleur, le soleil ne fait que
+         * traverser la fenêtre d'azimut.
+         *
+         * sunCheck() rend met=true quand la position du soleil n'est pas
+         * calculable, c'est-à-dire quand la position de l'installation n'est
+         * pas renseignée. Même règle que pour la sonde muette, et pour la même
+         * raison : la condition est un raffinement, le mouvement est le
+         * comportement normal — en cas de doute on bouge, et on le dit ici.
+         */
+        $sun = self::sunNow($_now);
+        $sunCheck = voletautobeSun::sunCheck($slot, $sun['azimuth'], $sun['elevation']);
+
+        if (!$sunCheck['met']) {
+            $text = $this->sunSkipText($_key, $slot, $sun, $sunCheck['reason']);
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . $text);
+            $this->checkAndUpdateCmd('last', $text . ' ' . self::humanDate(time()));
+            return false;
+        }
+
+        /*
          * La condition de température, sur la mesure de l'instant.
          *
          * temperatureCheck() rend met=true quand la sonde est muette : une
@@ -555,7 +703,8 @@ class voletautobe extends eqLogic {
                . self::orderName($slot['action'], $slot['position'])
                . ' ' . __('à', __FILE__) . ' ' . date('H:i', $due['timestamp'])
                . ' (' . self::humanSlot($slot) . ')'
-               . ($check['known'] ? '' : ' — ' . __('sonde muette, ordre envoyé quand même', __FILE__)));
+               . ($check['known'] ? '' : ' — ' . __('sonde muette, ordre envoyé quand même', __FILE__))
+               . ($sunCheck['known'] ? '' : ' — ' . __('position du soleil inconnue, ordre envoyé quand même', __FILE__)));
 
         $this->applyAction($slot['action'], $slot['position'], true, 'schedule');
         return true;
@@ -568,8 +717,32 @@ class voletautobe extends eqLogic {
         $measured = ($_temperature === null)
             ? __('sonde muette', __FILE__)
             : self::formatTemperature($_temperature);
-        return self::slotName($_key) . ' ' . __('sauté', __FILE__) . ' : ' . $measured
+        return self::skipPrefix($_key) . $measured
              . ', ' . __('seuil', __FILE__) . ' ' . self::formatTemperature($_slot['temp_value']);
+    }
+
+    /* « Protection solaire sauté : soleil à 8,4°, minimum 15° », « Protection
+     * solaire sauté : soleil au 112° (est-sud-est), fenêtre 135°–315° ». La
+     * position relevée et le réglage, tous les deux, pour la même raison que
+     * pour la température : c'est ce qui permet de corriger la fenêtre sans
+     * ouvrir la configuration. La hauteur d'abord, parce qu'un soleil sous
+     * l'horizon a un azimut parfaitement défini et parfaitement hors sujet. */
+    private function sunSkipText($_key, $_slot, $_sun, $_reason) {
+        if ($_reason == 'too_low') {
+            return self::skipPrefix($_key)
+                 . __('soleil à', __FILE__) . ' ' . self::formatAngle($_sun['elevation'])
+                 . ', ' . __('minimum', __FILE__) . ' ' . self::formatAngle($_slot['sun_elevation']);
+        }
+        return self::skipPrefix($_key)
+             . __('soleil au', __FILE__) . ' ' . self::azimuthText($_sun['azimuth'])
+             . ', ' . __('fenêtre', __FILE__) . ' '
+             . self::formatAngle($_slot['sun_from']) . '–' . self::formatAngle($_slot['sun_to']);
+    }
+
+    /* Le début commun des deux comptes rendus de saut : le moment, et le fait
+     * qu'il n'a rien envoyé. Ce qui suit est le motif, et lui seul change. */
+    private static function skipPrefix($_key) {
+        return self::slotName($_key) . ' ' . __('sauté', __FILE__) . ' : ';
     }
 
     /* ============================================================ TEMPÉRATURE */
@@ -656,6 +829,132 @@ class voletautobe extends eqLogic {
             return __('seulement si', __FILE__) . ' ≤ ' . self::formatTemperature($slot['temp_value']);
         }
         return '';
+    }
+
+    /* ================================================================= FAÇADE */
+
+    /*
+     * L'orientation de la façade du groupe, normalisée :
+     * array('from' => float, 'to' => float, 'elevation' => float).
+     *
+     * Elle appartient au groupe et non au moment, parce qu'un groupe rassemble
+     * les volets d'une pièce ou d'une façade : le soleil y arrive et la quitte
+     * aux mêmes azimuts pour tous ses moments. Écrite dans chaque moment, elle
+     * était écrite quatre fois, et l'utilisateur ne savait plus laquelle faisait
+     * foi le jour où deux copies divergeaient.
+     *
+     * « from » est l'azimut où le soleil arrive sur la façade, « to » celui où
+     * il la quitte, et la fenêtre qu'ils délimitent passe par le nord quand
+     * from > to : « de 300° à 30° » est une façade nord-ouest–nord-est, et elle
+     * contient 350°.
+     */
+    public function facade() {
+        return array(
+            'from'      => voletautobeSun::cleanAzimuth(
+                self::facadeValue($this->getConfiguration('facade_from', ''), self::DEFAULT_FACADE_FROM)),
+            'to'        => voletautobeSun::cleanAzimuth(
+                self::facadeValue($this->getConfiguration('facade_to', ''), self::DEFAULT_FACADE_TO)),
+            'elevation' => voletautobeSun::cleanElevation(
+                self::facadeValue($this->getConfiguration('facade_elevation', ''), self::DEFAULT_FACADE_ELEVATION)),
+        );
+    }
+
+    /*
+     * Un champ de façade vide reprend sa valeur de départ.
+     *
+     * Un champ effacé dans le formulaire arrive comme chaîne vide et non comme
+     * clé absente, et (float) '' vaut 0 : la façade regarderait plein nord et
+     * accepterait le soleil dès l'horizon. Un groupe jamais enregistré depuis
+     * l'arrivée de la façade est dans le même cas, et c'est le cas courant à la
+     * mise à jour.
+     */
+    private static function facadeValue($_value, $_default) {
+        return ($_value === '' || $_value === null || is_array($_value)) ? $_default : $_value;
+    }
+
+    /* « 135°, sud-est » : l'orientation rappelée là où la façade n'est pas sous
+     * les yeux — le journal, la carte d'accueil, la phrase de résumé d'un
+     * moment. Le chiffre seul ne dit rien à personne ; le nom de direction se
+     * vérifie avec une boussole, et c'est ainsi que l'utilisateur pense sa
+     * maison. */
+    public static function facadeAngleText($_azimuth) {
+        return self::formatAngle($_azimuth)
+             . ', ' . __(voletautobeSun::compassName($_azimuth), __FILE__);
+    }
+
+    /* ================================================================= SOLEIL */
+
+    /*
+     * Où est le soleil maintenant : array('azimuth' => ?float, 'elevation' => ?float).
+     *
+     * Statique comme location(), et pour la même raison : le soleil est le même
+     * pour tous les groupes de la maison. C'est ce qui permet à l'interface de
+     * l'afficher une fois, en haut de la page, comme outil de réglage — on
+     * regarde par la fenêtre, on voit où tape le soleil, on lit l'azimut et on
+     * le reporte dans la fenêtre du moment.
+     *
+     * Sans position d'installation, on rend null plutôt qu'un chiffre. Le
+     * calcul aboutirait pourtant : sur le point zéro, au large du golfe de
+     * Guinée, avec un azimut parfaitement plausible et parfaitement faux, qui
+     * fermerait les volets sur la mauvaise façade. C'est ce null que sunCheck()
+     * lit comme « on ne sait pas », et le moment se joue alors quand même.
+     */
+    public static function sunNow($_now = null) {
+        $now = ($_now === null) ? time() : $_now;
+        if (!self::hasLocation()) {
+            return array('azimuth' => null, 'elevation' => null);
+        }
+        $location = self::location();
+        return voletautobeSun::sunPosition($now, $location['latitude'], $location['longitude']);
+    }
+
+    /* « 200° », « 8,4° ». La même forme que formatTemperature() et pour la même
+     * raison : la virgule décimale parce que le plugin parle français, et pas de
+     * décimale inutile — « 15,0° » sur une hauteur ronde donnerait l'impression
+     * d'une précision qu'aucune façade n'a. */
+    public static function formatAngle($_value) {
+        $text = number_format((float) $_value, 1, ',', '');
+        $text = rtrim(rtrim($text, '0'), ',');
+        return $text . '°';
+    }
+
+    /* « 200° (sud-sud-ouest) ». Le chiffre seul ne dit rien à personne ; le nom
+     * de direction se vérifie avec une boussole, et c'est ainsi que
+     * l'utilisateur pense sa maison. Le nom vient de voletautobeSun, qui ne
+     * connaît pas Jeedom : il se traduit ici, comme les jours de la semaine. */
+    public static function azimuthText($_azimuth) {
+        return self::formatAngle($_azimuth)
+             . ' (' . __(voletautobeSun::compassName($_azimuth), __FILE__) . ')';
+    }
+
+    /* La condition de soleil d'un moment en toutes lettres, ou '' si le moment
+     * se joue où que soit le soleil. */
+    public static function sunText($_slot) {
+        $slot = voletautobeSun::cleanSlot($_slot);
+        if ($slot['sun_mode'] != voletautobeSun::SUN_WINDOW) {
+            return '';
+        }
+        $height = __('à plus de', __FILE__) . ' ' . self::formatAngle($slot['sun_elevation'])
+                . ' ' . __('de hauteur', __FILE__);
+        /*
+         * Avec un déclencheur de façade, la phrase ne dit rien de la condition,
+         * parce qu'il n'y a plus rien à dire : sunCheck() rend « aucune
+         * condition » pour ces deux modes.
+         *
+         * Le déclencheur ne tombe que lorsque le soleil est sur la façade —
+         * azimut ET hauteur — donc la condition ne peut plus rien écarter.
+         * Annoncer « soleil entre 135° et 315°, à plus de 15° de hauteur »
+         * décrirait un filtre qui n'existe pas, et reposerait la question qui a
+         * motivé cette reprise : « ma condition fait-elle doublon avec mon
+         * déclencheur ? » Elle n'en fait plus, et le résumé doit se taire
+         * plutôt que de laisser croire le contraire.
+         */
+        if (voletautobeSun::isFacadeMode($slot['mode'])) {
+            return '';
+        }
+        return __('soleil entre', __FILE__) . ' ' . self::formatAngle($slot['sun_from'])
+             . ' ' . __('et', __FILE__) . ' ' . self::formatAngle($slot['sun_to'])
+             . ', ' . $height;
     }
 
     /* ================================================================= ORDRES */
@@ -958,12 +1257,24 @@ class voletautobe extends eqLogic {
         $this->checkAndUpdateCmd('sunrise', ($sun['sunrise'] === null) ? '--:--' : date('H:i', $sun['sunrise']));
         $this->checkAndUpdateCmd('sunset', ($sun['sunset'] === null) ? '--:--' : date('H:i', $sun['sunset']));
 
+        /* La position du soleil au dixième de degré : c'est la précision d'une
+         * boussole, et c'est déjà plus que n'en demande une façade. Une position
+         * incalculable ne remet pas les commandes à zéro — « 0° » serait le nord
+         * et l'horizon, deux endroits où le soleil n'est pas. */
+        $sunPosition = self::sunNow($now);
+        if ($sunPosition['azimuth'] !== null) {
+            $this->checkAndUpdateCmd('azimuth', round($sunPosition['azimuth'], 1));
+        }
+        if ($sunPosition['elevation'] !== null) {
+            $this->checkAndUpdateCmd('elevation', round($sunPosition['elevation'], 1));
+        }
+
         $this->checkAndUpdateCmd('active', $this->isPaused() ? 0 : 1);
 
         $best = null;
         foreach (self::SLOTS as $key) {
             $next = $this->nextOccurrence($key, $now);
-            $this->checkAndUpdateCmd('next' . ucfirst($key), ($next === null) ? '' : self::humanDate($next, $now));
+            $this->checkAndUpdateCmd(self::nextCmdId($key), ($next === null) ? '' : self::humanDate($next, $now));
             if ($next !== null && ($best === null || $next < $best['timestamp'])) {
                 $best = array('timestamp' => $next, 'key' => $key);
             }
@@ -1004,10 +1315,24 @@ class voletautobe extends eqLogic {
 
     public static function slotName($_key) {
         switch ($_key) {
-            case 'morning': return __('Le matin', __FILE__);
-            case 'heat':    return __('Protection solaire', __FILE__);
+            case 'morning':   return __('Le matin', __FILE__);
+            case 'heat':      return __('Protection solaire', __FILE__);
+            case 'shade_end': return __('Fin de protection', __FILE__);
         }
         return __('Le soir', __FILE__);
+    }
+
+    /*
+     * Le logicalId de la commande « prochain rendez-vous » d'un moment.
+     *
+     * « next » suivi de la clé en capitales de tête, souligné compris :
+     * shade_end donne nextShadeEnd. Un simple ucfirst() donnerait
+     * « nextShade_end », un logicalId que createCommands() ne crée pas — la
+     * commande n'existerait pas, checkAndUpdateCmd() ne ferait rien, et le
+     * rendez-vous de ce moment ne s'afficherait jamais, sans la moindre erreur.
+     */
+    public static function nextCmdId($_key) {
+        return 'next' . str_replace(' ', '', ucwords(str_replace('_', ' ', $_key)));
     }
 
     /* L'ordre d'un moment en un mot : « Ouvrir », « Fermer », « Fermer à 30 % ».
@@ -1086,12 +1411,42 @@ class voletautobe extends eqLogic {
         $slot = voletautobeSun::cleanSlot($_slot);
         if ($slot['mode'] == voletautobeSun::MODE_FIXED) {
             $when = __('à', __FILE__) . ' ' . $slot['time'];
+        } elseif (voletautobeSun::isFacadeMode($slot['mode'])) {
+            /*
+             * L'azimut est rappelé entre parenthèses, et il le doit : cette
+             * phrase se lit dans le journal et sur la carte d'accueil, loin de
+             * l'onglet où la façade est réglée. « Quand le soleil arrive sur la
+             * façade » sans le chiffre ne permettrait pas de voir qu'on a tapé
+             * 13 au lieu de 135.
+             *
+             * Le décalage garde tout son sens ici : « 20 min après que le
+             * soleil arrive sur la façade », c'est le temps que la façade
+             * chauffe.
+             */
+            $in = ($slot['mode'] == voletautobeSun::MODE_FACADE_IN);
+            $reached = ' (' . self::facadeAngleText($in ? $slot['sun_from'] : $slot['sun_to']) . ')';
+            if ($slot['offset'] == 0) {
+                $when = ($in ? __('quand le soleil arrive sur la façade', __FILE__)
+                             : __('quand le soleil quitte la façade', __FILE__)) . $reached;
+            } else {
+                $when = abs($slot['offset']) . ' ' . __('min', __FILE__) . ' '
+                      . (($slot['offset'] < 0) ? __('avant', __FILE__) : __('après', __FILE__)) . ' '
+                      . ($in ? __('que le soleil arrive sur la façade', __FILE__)
+                             : __('que le soleil quitte la façade', __FILE__)) . $reached;
+            }
         } else {
             $event = ($slot['mode'] == voletautobeSun::MODE_SUNSET)
                 ? __('le coucher du soleil', __FILE__)
                 : __('le lever du soleil', __FILE__);
             if ($slot['offset'] == 0) {
-                $when = __('à', __FILE__) . ' ' . $event;
+                /* « au coucher du soleil », et non « à le coucher du soleil » :
+                 * la préposition se contracte avec l'article, et cette phrase
+                 * est la ligne que l'utilisateur relit sous chaque moment, sur
+                 * la carte d'accueil et dans le journal. Un plugin qui écrit
+                 * « à le » perd sa crédibilité sur tout le reste. */
+                $when = ($slot['mode'] == voletautobeSun::MODE_SUNSET)
+                    ? __('au coucher du soleil', __FILE__)
+                    : __('au lever du soleil', __FILE__);
             } else {
                 $when = abs($slot['offset']) . ' ' . __('min', __FILE__) . ' '
                       . (($slot['offset'] < 0) ? __('avant', __FILE__) : __('après', __FILE__)) . ' ' . $event;
@@ -1114,6 +1469,12 @@ class voletautobe extends eqLogic {
                 $names[] = __(self::$_days[$day], __FILE__);
             }
             $when .= ', ' . implode(' ', $names);
+        }
+        /* Les deux conditions dans l'ordre où elles sont évaluées : la phrase
+         * se lit alors comme le compte rendu du saut s'écrira. */
+        $sun = self::sunText($slot);
+        if ($sun !== '') {
+            $when .= ', ' . $sun;
         }
         $temperature = self::temperatureText($slot);
         if ($temperature !== '') {
@@ -1148,14 +1509,20 @@ class voletautobe extends eqLogic {
     public function previewSlot($_key, $_slot = null, $_count = 3) {
         $now = time();
         $location = self::location();
+        /* Un réglage en cours de saisie arrive sans façade : le formulaire d'un
+         * moment ne la porte plus, elle est dans l'onglet Volets. Sans cette
+         * recopie, l'aperçu montrerait la façade par défaut — sud-est à
+         * nord-ouest — pour une maison orientée autrement, et ce sont
+         * précisément les heures que l'utilisateur regarde pour se décider. */
         $slot = ($_slot === null) ? $this->slotConfig($_key)
-                                  : voletautobeSun::cleanSlot($_slot, self::slotAction($_key));
+                                  : voletautobeSun::cleanSlot($this->withFacade($_slot), self::slotAction($_key));
         $preview = array();
         foreach (voletautobeSun::nextOccurrences($slot, $now, $location['latitude'], $location['longitude'], $this->seed($_key), $_count) as $timestamp) {
             $preview[] = self::humanDate($timestamp, $now);
         }
         $needsSun = ($slot['mode'] != voletautobeSun::MODE_FIXED);
         $needsTemperature = ($slot['temp_mode'] != voletautobeSun::TEMP_NONE);
+        $needsSunPosition = ($slot['sun_mode'] != voletautobeSun::SUN_NONE);
         return array(
             'summary'     => self::humanSlot($slot),
             'occurrences' => $preview,
@@ -1169,9 +1536,15 @@ class voletautobe extends eqLogic {
              * heures parfaitement plausibles et parfaitement fausses — c'est
              * ici qu'il faut le dire, au moment où l'utilisateur règle le
              * moment.
+             *
+             * L'azimut et la hauteur sont logés à la même enseigne, et le
+             * doivent : sans latitude, ce sont ceux du golfe de Guinée. Les
+             * deux modes de façade sont déjà comptés dans $needsSun, la
+             * condition de soleil non.
              */
-            'noLocation'  => ($needsSun && !self::hasLocation()) ? 1 : 0,
+            'noLocation'  => (($needsSun || $needsSunPosition) && !self::hasLocation()) ? 1 : 0,
             'temperature' => self::temperatureText($slot),
+            'sun'         => self::sunText($slot),
             /*
              * Une condition posée sans sonde lisible ne bloque rien — le plugin
              * bouge en cas de doute — mais elle ne fait rien non plus. C'est la
@@ -1240,6 +1613,7 @@ class voletautobe extends eqLogic {
         $volets = 0;
         $paused = 0;
         $blindConditions = 0;
+        $blindWindows = 0;
         foreach ($groups as $eqLogic) {
             $volets += count($eqLogic->voletList());
             if ($eqLogic->isPaused()) {
@@ -1253,6 +1627,20 @@ class voletautobe extends eqLogic {
                     $slot = $eqLogic->slotConfig($key);
                     if ($slot['enable'] == 1 && $slot['temp_mode'] != voletautobeSun::TEMP_NONE) {
                         $blindConditions++;
+                        break;
+                    }
+                }
+            }
+            /* La même panne silencieuse, une cause de plus : une fenêtre de
+             * soleil posée sans position d'installation. Faute de latitude, la
+             * position du soleil n'est pas calculable, la condition ne filtre
+             * plus rien, et le moment se joue tous les jours comme si la façade
+             * était au soleil. */
+            if (!$location) {
+                foreach (self::SLOTS as $key) {
+                    $slot = $eqLogic->slotConfig($key);
+                    if ($slot['enable'] == 1 && $slot['sun_mode'] != voletautobeSun::SUN_NONE) {
+                        $blindWindows++;
                         break;
                     }
                 }
@@ -1293,6 +1681,15 @@ class voletautobe extends eqLogic {
                 'advice'  => ($blindConditions == 0) ? ''
                     : __('Leur condition de température est sans effet : faute de mesure, les volets bougent quand même. Choisissez une sonde dans la configuration du plugin ou du groupe.', __FILE__),
                 'state'   => ($blindConditions == 0),
+            ),
+            array(
+                'test'    => __('Fenêtre de soleil', __FILE__),
+                'result'  => ($blindWindows == 0)
+                    ? __('calculable', __FILE__)
+                    : $blindWindows . ' ' . __('groupe(s) sans position', __FILE__),
+                'advice'  => ($blindWindows == 0) ? ''
+                    : __('Leur condition de soleil est sans effet : sans position de l\'installation, l\'azimut et la hauteur du soleil ne se calculent pas, et les volets bougent quand même.', __FILE__),
+                'state'   => ($blindWindows == 0),
             ),
         );
     }
