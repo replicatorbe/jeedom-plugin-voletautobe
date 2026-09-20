@@ -2,6 +2,16 @@
 if (!isConnect('admin')) {
 	throw new Exception('{{401 - Accès non autorisé}}');
 }
+
+/* L'autoload du coeur ne connaît que la classe qui porte le nom du plugin : les
+ * deux autres se chargent par elle. Cette page appelle voletautobeVolets avant
+ * toute autre chose, pour remplir la liste des sondes — sans ce require, elle
+ * meurt sur « Class "voletautobeVolets" not found », et le symptôme ne désigne
+ * pas la cause : la fenêtre de configuration du plugin reste vide, le journal du
+ * plugin ne dit rien, et tout est dans /var/www/html/log/http.error.
+ *
+ * C'est arrivé à la première ouverture de la page. */
+require_once __DIR__ . '/../core/class/voletautobe.class.php';
 ?>
 <form class="form-horizontal">
 	<fieldset>

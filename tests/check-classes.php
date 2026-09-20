@@ -186,6 +186,47 @@ if (file_exists($icone)) {
     }
 }
 
+/* ----------------------------------------------------------------- 10 ---
+ * Les classes auxiliaires ne sont pas connues de l'autoload du coeur.
+ *
+ * jeedom::autoload() ne sait charger que la classe qui porte le nom du plugin
+ * (core/php/core.inc.php) : voletautobeSun et voletautobeVolets n'existent que
+ * parce que voletautobe.class.php les require. Un fichier servi au navigateur —
+ * page, modale, ajax, page de configuration — qui nomme l'une des deux avant
+ * d'avoir touché à voletautobe meurt donc sur « Class not found ».
+ *
+ * Et le symptôme ne désigne pas la cause : la page reste vide, le journal du
+ * plugin ne dit rien, tout est dans /var/www/html/log/http.error. C'est arrivé
+ * sur plugin_info/configuration.php, à sa première ouverture.
+ */
+$racine = __DIR__ . '/..';
+$servis = array('plugin_info/configuration.php', 'plugin_info/install.php',
+                'core/ajax/voletautobe.ajax.php', 'desktop/php/voletautobe.php',
+                'desktop/modal/volet.picker.php');
+foreach ($servis as $fichier) {
+    $chemin = $racine . '/' . $fichier;
+    if (!file_exists($chemin)) {
+        continue;
+    }
+    $contenu = file_get_contents($chemin);
+    if (!preg_match('/voletautobe(Sun|Volets)::/', $contenu)) {
+        continue;
+    }
+    /* Soit le fichier charge la classe principale lui-même, soit il a nommé
+     * voletautobe avant, ce qui déclenche l'autoload et amène les deux autres
+     * avec lui. */
+    if (preg_match('/require_once[^;]*voletautobe\.class\.php/', $contenu)) {
+        continue;
+    }
+    preg_match('/voletautobe(Sun|Volets)?::/', $contenu, $premier);
+    if (!isset($premier[1]) || $premier[1] === '') {
+        continue;
+    }
+    $problems[] = 'Classe auxiliaire nommée sans chargement : ' . $fichier
+        . ' appelle voletautobe' . $premier[1] . ':: sans require_once de la classe principale '
+        . '— l\'autoload du coeur ne la connaît pas, la page meurt sur « Class not found ».';
+}
+
 /* ---------------------------------------------------------------- BILAN --- */
 if (empty($problems)) {
     echo "Contrôles du coeur : aucun problème.\n";
