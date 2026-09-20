@@ -1,0 +1,74 @@
+<?php
+/* This file is part of Jeedom.
+ *
+ * Jeedom is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Jeedom is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Jeedom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+require_once __DIR__ . '/../../../core/php/core.inc.php';
+/* La désinstallation passe ici alors que le plugin peut déjà être désactivé :
+ * l'autoload ne chargerait alors plus sa classe. */
+require_once __DIR__ . '/../core/class/voletautobe.class.php';
+
+function voletautobe_install() {
+    /*
+     * Le plugin ne sert à rien sans la position de l'installation : les heures
+     * de lever et de coucher du soleil seraient celles du point zéro, au large
+     * du golfe de Guinée, sans qu'aucune erreur ne soit levée. Le dire à
+     * l'installation évite de chercher longtemps pourquoi les volets se ferment
+     * à 18 h 15 toute l'année.
+     *
+     * Le contrôle vit dans la classe : le cron quotidien le refait, et retire
+     * l'avertissement le jour où la position est renseignée.
+     */
+    voletautobe::checkLocation();
+}
+
+function voletautobe_update() {
+    voletautobe_install();
+
+    /*
+     * Les groupes déjà créés n'ont pas les commandes ajoutées depuis. Sans ce
+     * passage, « Position », « Température retenue » ou « Suspendre »
+     * n'existeraient que sur les groupes créés après la mise à jour, et
+     * l'utilisateur croirait la nouveauté absente. createCommands() ne touche
+     * ni au nom ni à la visibilité de ce qui existe déjà : ce que
+     * l'utilisateur a réglé lui reste.
+     */
+    foreach (eqLogic::byType('voletautobe') as $eqLogic) {
+        try {
+            $eqLogic->createCommands();
+        } catch (Throwable $e) {
+            log::add('voletautobe', 'error', $eqLogic->getHumanName() . ' : ' . $e->getMessage());
+        }
+    }
+}
+
+function voletautobe_remove() {
+    /*
+     * Les marques d'exécution du jour survivraient à la désinstallation : elles
+     * empêcheraient un moment de repartir le jour d'une réinstallation, et rien
+     * ne le montrerait. Les équipements, eux, sont nettoyés un par un par
+     * voletautobe::preRemove().
+     */
+    foreach (eqLogic::byType('voletautobe') as $eqLogic) {
+        foreach (voletautobe::SLOTS as $key) {
+            try {
+                cache::delete('voletautobe::done::' . $eqLogic->getId() . '::' . $key);
+            } catch (Throwable $e) {
+                log::add('voletautobe', 'debug', __('Nettoyage du cache impossible :', __FILE__) . ' ' . $e->getMessage());
+            }
+        }
+    }
+    message::removeAll('voletautobe');
+}
