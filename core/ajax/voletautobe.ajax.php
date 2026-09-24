@@ -151,6 +151,11 @@ try {
         ajax::success(array('sensors' => voletautobeVolets::discoverTemperatures()));
     }
 
+    /* Les sondes de luminosité, sous la même forme. */
+    if (init('action') == 'luminosities') {
+        ajax::success(array('sensors' => voletautobeVolets::discoverLuminosities()));
+    }
+
     /* Ce qu'un groupe contient et quand il agira : tout ce que la page affiche
      * à l'ouverture d'un équipement. */
     if (init('action') == 'group') {
@@ -160,6 +165,11 @@ try {
          * tape le soleil, et on lit l'azimut affiché. Les deux valeurs sont
          * nulles quand la position de l'installation n'est pas renseignée. */
         $sun = voletautobe::sunNow();
+        /* Les deux sondes avec leur âge : une sonde figée affiche sa dernière
+         * valeur partout ailleurs dans Jeedom, et c'est ici seulement que l'on
+         * peut voir qu'elle ne compte plus. */
+        $temperature = $eqLogic->temperatureState();
+        $lux = $eqLogic->luxState();
         /* Les quatre moments dans l'ordre de la journée, et les quatre : un
          * aperçu oublié ici laisse le bloc correspondant muet dans la page,
          * sans erreur ni message — la panne la plus difficile à relier à sa
@@ -173,8 +183,15 @@ try {
             'paused'          => $eqLogic->isPaused() ? 1 : 0,
             'pausedSince'     => $eqLogic->getConfiguration('paused_since', ''),
             'hasLocation'     => voletautobe::hasLocation() ? 1 : 0,
-            'temperature'     => $eqLogic->temperature(),
-            'temperatureName' => $eqLogic->temperatureName(),
+            'temperature'      => $temperature['value'],
+            'temperatureName'  => $eqLogic->temperatureName(),
+            'temperatureStale' => $temperature['stale'] ? 1 : 0,
+            'temperatureAge'   => $temperature['age'],
+            'lux'              => $lux['value'],
+            'luxName'          => $eqLogic->luxName(),
+            'luxUnit'          => $eqLogic->luxUnit(),
+            'luxStale'         => $lux['stale'] ? 1 : 0,
+            'luxAge'           => $lux['age'],
             'azimuth'         => $sun['azimuth'],
             'elevation'       => $sun['elevation'],
         ));

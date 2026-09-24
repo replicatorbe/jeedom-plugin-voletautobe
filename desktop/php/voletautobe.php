@@ -157,6 +157,43 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 			</div>
 		</div>
 
+		<!--
+		     La sœur exacte de la condition de température, et comme elle
+		     facultative partout — protection solaire comprise. Le plugin sait où
+		     est le soleil, pas s'il brille : c'est la sonde de luminosité qui le
+		     dit, et elle seule évite de baisser les volets en plein après-midi
+		     gris. Posée d'office, elle ferait dépendre la protection d'une sonde
+		     que la plupart des maisons n'ont pas.
+		-->
+		<div class="form-group">
+			<label class="col-sm-3 control-label">
+				{{Luminosité}}
+				<sup><i class="fas fa-question-circle" title="{{L'autre sonde qui peut empêcher ce moment. Le cas d'usage : ne pas fermer la protection solaire un jour couvert, où le soleil est bien sur la façade mais ne chauffe rien. Si la sonde ne répond pas, le moment est joué quand même, comme pour la température.}}"></i></sup>
+			</label>
+			<div class="col-sm-4">
+				<select class="eqLogicAttr form-control vabLuxMode vabPreviewTrigger" data-l1key="configuration" data-l2key="<?php echo $_key; ?>" data-l3key="lux_mode">
+					<option value="none">{{Sans condition}}</option>
+					<option value="min">{{Seulement si la luminosité atteint au moins}}</option>
+					<option value="max">{{Seulement si la luminosité ne dépasse pas}}</option>
+				</select>
+			</div>
+			<div class="col-sm-4 vabLuxBlock">
+				<div class="input-group">
+					<!-- Texte et non « number », pour la même raison que la
+					     température : « 20 000 », tapé avec l'espace des milliers,
+					     serait vidé en silence par le navigateur. Le serveur relit
+					     la saisie et accepte l'espace. -->
+					<input type="text" class="eqLogicAttr form-control roundedLeft vabLuxValue vabPreviewTrigger" data-l1key="configuration" data-l2key="<?php echo $_key; ?>" data-l3key="lux_value" placeholder="20000">
+					<!-- L'unité vient de la sonde retenue par le groupe : « lx »
+					     tant qu'on n'en sait pas plus, remplacée par le JS dès que
+					     le serveur a répondu — un capteur de rayonnement parle en
+					     W/m², et un seuil tapé dans la mauvaise unité ne filtrerait
+					     jamais rien. -->
+					<span class="input-group-addon roundedRight vabLuxUnit">lx</span>
+				</div>
+			</div>
+		</div>
+
 		<div class="form-group">
 			<label class="col-sm-3 control-label">
 				{{Soleil}}
@@ -398,6 +435,29 @@ function voletautobeSlot($_key, $_title, $_icon, $_help) {
 								<label class="col-sm-4 control-label">&nbsp;</label>
 								<div class="col-sm-8">
 									<span class="help-block" style="margin:0;">{{Une maison a une température extérieure, pas huit : laissez « Celle du plugin » et réglez-la une fois dans la configuration. Un groupe qui mérite sa propre sonde — la chambre au nord, une véranda — choisit la sienne ici. Sans sonde lisible, les conditions de température de l'onglet Programmation sont sans effet : les moments sont joués quand même.}}</span>
+								</div>
+							</div>
+						</fieldset>
+						<fieldset>
+							<legend><i class="fas fa-sun"></i> {{Luminosité}}</legend>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Sonde}}</label>
+								<div class="col-sm-8">
+									<select class="eqLogicAttr form-control" id="in_voletautobeLuxSensor" data-l1key="configuration" data-l2key="lux_cmd">
+										<option value="">{{Celle du plugin}}</option>
+									</select>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Mesure}}</label>
+								<div class="col-sm-8">
+									<span id="span_voletautobeLux" class="label label-default">—</span>
+								</div>
+							</div>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">&nbsp;</label>
+								<div class="col-sm-8">
+									<span class="help-block" style="margin:0;">{{Facultatif. Un luxmètre, une station météo ou un capteur de rayonnement : ce qui dit si le soleil brille, là où le plugin ne sait que où il est. Sans sonde lisible, les conditions de luminosité de l'onglet Programmation ne filtrent rien : les moments sont joués quand même.}}</span>
 								</div>
 							</div>
 						</fieldset>

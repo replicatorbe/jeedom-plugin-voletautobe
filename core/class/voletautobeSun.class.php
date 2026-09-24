@@ -83,6 +83,31 @@ class voletautobeSun {
     const TEMP_MIN_VALUE = -50.0;
     const TEMP_MAX_VALUE = 60.0;
 
+    /*
+     * La condition de luminosité, facultative, et bâtie exactement sur le
+     * modèle de celle de température.
+     *
+     * Elle répond au cas que ni la façade ni la sonde ne voient : un jour
+     * couvert à 27 °C. Le soleil est sur la façade — par le calcul — et il fait
+     * chaud, mais rien ne tape sur la vitre, et fermer aux trois quarts plonge
+     * la pièce dans la pénombre pour rien. Seule une mesure de lumière sait
+     * qu'il y a des nuages.
+     *
+     * Le seuil est un nombre nu, dans l'unité de la sonde : lux pour un
+     * luxmètre, W/m² pour un pyranomètre, indice pour une sonde UV. La classe
+     * ne convertit rien ; c'est l'utilisateur qui règle un seuil dans l'unité
+     * qu'il lit sur son capteur.
+     */
+    const LUX_NONE = 'none';
+    const LUX_MIN  = 'min';   /* seulement si la luminosité est >= lux_value */
+    const LUX_MAX  = 'max';   /* seulement si la luminosité est <= lux_value */
+
+    /* Bornes d'un seuil de luminosité. Le plafond couvre le plein soleil d'été
+     * en lux — un peu plus de 100 000 — avec de la marge ; au-delà, c'est une
+     * faute de frappe. */
+    const LUX_MIN_VALUE = 0.0;
+    const LUX_MAX_VALUE = 200000.0;
+
     /* La condition de soleil : ne jouer le moment que si le soleil est bien
      * sur cette façade-là. C'est le pendant de la condition de température, et
      * elle répond à la même question posée autrement — une protection solaire
@@ -136,6 +161,8 @@ class voletautobeSun {
             'days'       => array(1, 2, 3, 4, 5, 6, 7),
             'temp_mode'  => self::TEMP_NONE,
             'temp_value' => 0.0,
+            'lux_mode'   => self::LUX_NONE,
+            'lux_value'  => 0.0,
             'sun_mode'   => self::SUN_NONE,
             /* La façade du groupe, recopiée ici par l'appelant : la classe ne
              * connaît pas Jeedom et doit recevoir l'orientation avec le
@@ -217,6 +244,13 @@ class voletautobeSun {
             $clean['temp_value'] = self::cleanTemperature($_slot['temp_value']);
         }
 
+        if (isset($_slot['lux_mode']) && in_array($_slot['lux_mode'], array(self::LUX_NONE, self::LUX_MIN, self::LUX_MAX))) {
+            $clean['lux_mode'] = $_slot['lux_mode'];
+        }
+        if (isset($_slot['lux_value'])) {
+            $clean['lux_value'] = self::cleanLux($_slot['lux_value']);
+        }
+
         if (isset($_slot['sun_mode']) && in_array($_slot['sun_mode'], array(self::SUN_NONE, self::SUN_WINDOW))) {
             $clean['sun_mode'] = $_slot['sun_mode'];
         }
@@ -241,6 +275,17 @@ class voletautobeSun {
      */
     public static function cleanTemperature($_value) {
         return max(self::TEMP_MIN_VALUE, min(self::TEMP_MAX_VALUE, self::toFloat($_value)));
+    }
+
+    /* Un seuil de luminosité. « 20 000 » s'écrit avec une espace chez les
+     * francophones, et (float) le couperait à 20 : la condition serait remplie
+     * par une nuit de pleine lune. Les espaces, fines comprises, sont donc
+     * retirées avant la conversion. */
+    public static function cleanLux($_value) {
+        if (is_string($_value)) {
+            $_value = preg_replace('/[\s\x{00A0}\x{202F}]+/u', '', $_value);
+        }
+        return max(self::LUX_MIN_VALUE, min(self::LUX_MAX_VALUE, self::toFloat($_value)));
     }
 
     /* Un azimut, ramené sur le tour de cadran. Une saisie hors bornes est une
@@ -315,6 +360,35 @@ class voletautobeSun {
         }
         $met = ($temperature <= $slot['temp_value']);
         return array('met' => $met, 'known' => true, 'reason' => $met ? 'ok' : 'too_warm');
+    }
+
+    /*
+     * La condition de luminosité d'un moment, évaluée sur une mesure.
+     *
+     * Rend array('met' => bool, 'known' => bool, 'reason' => string) où reason
+     * vaut 'none', 'unknown', 'ok', 'too_dark' ou 'too_bright'.
+     *
+     * Même règle que pour la température, et pour la même raison : une mesure
+     * absente laisse passer l'ordre. Un luxmètre dont la pile est morte ne doit
+     * pas supprimer la protection solaire pour tout l'été sans que rien ne le
+     * dise.
+     */
+    public static function luxCheck($_slot, $_lux) {
+        $slot = self::cleanSlot($_slot);
+        if ($slot['lux_mode'] == self::LUX_NONE) {
+            return array('met' => true, 'known' => true, 'reason' => 'none');
+        }
+        if ($_lux === null) {
+            return array('met' => true, 'known' => false, 'reason' => 'unknown');
+        }
+
+        $lux = (float) $_lux;
+        if ($slot['lux_mode'] == self::LUX_MIN) {
+            $met = ($lux >= $slot['lux_value']);
+            return array('met' => $met, 'known' => true, 'reason' => $met ? 'ok' : 'too_dark');
+        }
+        $met = ($lux <= $slot['lux_value']);
+        return array('met' => $met, 'known' => true, 'reason' => $met ? 'ok' : 'too_bright');
     }
 
     /*

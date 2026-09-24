@@ -154,7 +154,32 @@
         "à": "at",
         "à plus de": "more than",
         "équipement désactivé": "device disabled",
-        "équipement introuvable, choisissez le volet à nouveau": "device not found, choose the shutter again"
+        "équipement introuvable, choisissez le volet à nouveau": "device not found, choose the shutter again",
+        "Aucune nouvelle mesure depuis plus longtemps que le délai réglé dans la configuration du plugin : leur dernière valeur est ignorée. Vérifiez la pile ou le plugin de la sonde.": "No new reading for longer than the delay set in the plugin configuration: their last value is ignored. Check the battery or the sensor's plugin.",
+        "Elle se serait réessayée chaque minute tant que le soleil est sur la façade.": "It would have been retried every minute while the sun is on the facade.",
+        "Envoi en arrière-plan impossible, ordres envoyés sur place :": "Could not send in the background, orders sent on the spot:",
+        "Leur condition de luminosité est sans effet : faute de mesure, les volets bougent quand même. Choisissez une sonde dans la configuration du plugin ou du groupe.": "Their brightness condition has no effect: with no reading, the shutters move anyway. Choose a sensor in the plugin or in the group configuration.",
+        "Luminosité retenue": "Brightness used",
+        "Ordres abandonnés : la tâche d'envoi a démarré trop tard.": "Orders dropped: the sending task started too late.",
+        "Ordres abandonnés : la tâche d\\'envoi a démarré trop tard.": "Orders dropped: the sending task started too late.",
+        "Sonde de luminosité": "Brightness sensor",
+        "Sondes figées": "Frozen sensors",
+        "abandonnée pour aujourd'hui : conditions jamais réunies": "given up for today: conditions never met",
+        "abandonnée pour aujourd\\'hui : conditions jamais réunies": "given up for today: conditions never met",
+        "après attente des conditions": "after waiting for the conditions",
+        "en attente :": "waiting:",
+        "figée depuis": "frozen for",
+        "h": "h",
+        "j": "d",
+        "lisible ou inutilisée": "readable or unused",
+        "luminosité": "brightness",
+        "muette, ordre envoyé quand même": "silent, order sent anyway",
+        "nouvel essai jusqu'à": "retrying until",
+        "nouvel essai jusqu\\'à": "retrying until",
+        "ordre envoyé quand même": "order sent anyway",
+        "seulement si luminosité": "only if brightness",
+        "sonde de luminosité": "brightness sensor",
+        "sonde de température": "temperature sensor"
     },
     "plugins/voletautobe/core/class/voletautobeVolets.class.php": {
         "Sans objet parent": "No parent object"
@@ -249,7 +274,13 @@
         "Équipement désactivé": "Device disabled",
         "Équipement supprimé": "Device deleted",
         "à": "to",
-        "à désigner": "to be named"
+        "à désigner": "to be named",
+        "Aucune sonde de luminosité lisible : cette condition est sans effet, le moment sera joué quand même.": "No readable brightness sensor: this condition has no effect, the moment will be played anyway.",
+        "Sonde figée": "Frozen sensor",
+        "Sonde figée depuis": "Sensor frozen for",
+        "h": "h",
+        "j": "d",
+        "min": "min"
     },
     "plugins/voletautobe/desktop/modal/volet.picker.php": {
         "401 - Accès non autorisé": "401 - Unauthorized access",
@@ -384,7 +415,14 @@
         "Volets de ce groupe": "Shutters of this group",
         "À une heure fixe": "At a fixed time",
         "État": "State",
-        "à": "at"
+        "à": "at",
+        "Facultatif. Un luxmètre, une station météo ou un capteur de rayonnement : ce qui dit si le soleil brille, là où le plugin ne sait que où il est. Sans sonde lisible, les conditions de luminosité de l'onglet Programmation ne filtrent rien : les moments sont joués quand même.": "Optional. A lux meter, a weather station or a radiation sensor: what tells whether the sun is shining, where the plugin only knows where it is. With no readable sensor, the brightness conditions of the Schedule tab filter nothing: the moments are played anyway.",
+        "Facultatif. Un luxmètre, une station météo ou un capteur de rayonnement : ce qui dit si le soleil brille, là où le plugin ne sait que où il est. Sans sonde lisible, les conditions de luminosité de l\\'onglet Programmation ne filtrent rien : les moments sont joués quand même.": "Optional. A lux meter, a weather station or a radiation sensor: what tells whether the sun is shining, where the plugin only knows where it is. With no readable sensor, the brightness conditions of the Schedule tab filter nothing: the moments are played anyway.",
+        "L'autre sonde qui peut empêcher ce moment. Le cas d'usage : ne pas fermer la protection solaire un jour couvert, où le soleil est bien sur la façade mais ne chauffe rien. Si la sonde ne répond pas, le moment est joué quand même, comme pour la température.": "The other sensor that can hold this moment back. The use case: not closing for sun protection on an overcast day, when the sun is indeed on the facade but heats nothing. If the sensor does not answer, the moment is played anyway, as for the temperature.",
+        "L\\'autre sonde qui peut empêcher ce moment. Le cas d\\'usage : ne pas fermer la protection solaire un jour couvert, où le soleil est bien sur la façade mais ne chauffe rien. Si la sonde ne répond pas, le moment est joué quand même, comme pour la température.": "The other sensor that can hold this moment back. The use case: not closing for sun protection on an overcast day, when the sun is indeed on the facade but heats nothing. If the sensor does not answer, the moment is played anyway, as for the temperature.",
+        "Luminosité": "Brightness",
+        "Seulement si la luminosité atteint au moins": "Only if the brightness reaches at least",
+        "Seulement si la luminosité ne dépasse pas": "Only if the brightness does not exceed"
     },
     "plugins/voletautobe/plugin_info/configuration.php": {
         "401 - Accès non autorisé": "401 - Unauthorized access",
@@ -397,7 +435,6 @@
         "La position de l'installation n'est pas renseignée : les heures de soleil seraient fausses. Réglages → Système → Configuration → Général.": "The position of the installation is not set: the sun times would be wrong. Settings → System → Configuration → General.",
         "La position de l\\'installation n\\'est pas renseignée : les heures de soleil seraient fausses. Réglages → Système → Configuration → Général.": "The position of the installation is not set: the sun times would be wrong. Settings → System → Configuration → General.",
         "La sonde que tous les groupes utilisent, sauf ceux qui en choisissent une autre. Une maison a une température extérieure, pas huit : la régler ici évite de la choisir groupe par groupe, et de la corriger partout le jour où l'on change de station météo.": "The sensor every group uses, except those that choose another one. A house has one outdoor temperature, not eight: setting it here saves you from choosing it group by group, and from correcting it everywhere the day you change weather station.",
-        "Millisecondes d'attente entre deux ordres d'un même groupe. Les passerelles radio — le 433 MHz en particulier — perdent les trames envoyées coup sur coup : le volet ne bouge pas, et rien ne le signale, puisque la commande a bien été jouée. C'est la panne la plus difficile à voir du plugin, et elle se corrige en laissant respirer la passerelle. 400 ms conviennent dans la plupart des cas ; 0 envoie tout d'un coup, ce qui ne se justifie que sur une installation entièrement filaire. L'attente totale d'un groupe est plafonnée à 30 secondes, pour ne pas retenir le cron.": "Milliseconds to wait between two orders of the same group. Radio gateways — 433 MHz in particular — lose the frames sent one on top of another: the shutter does not move, and nothing points it out, since the command was duly played. It is the hardest failure to see in the plugin, and it is fixed by letting the gateway breathe. 400 ms suit most cases; 0 sends everything at once, which is only justified on an entirely wired installation. The total wait of a group is capped at 30 seconds, so as not to hold the cron back.",
         "Minutes pendant lesquelles un moment manqué est encore joué — box éteinte, redémarrage, cron en retard. Passé ce délai il est abandonné : ouvrir les volets du matin à midi ne rend service à personne. 15 minutes conviennent dans la quasi-totalité des cas.": "Minutes during which a missed moment is still played — box switched off, reboot, late cron. After that it is dropped: opening the morning shutters at noon helps nobody. 15 minutes suit almost every case.",
         "Position": "Position",
         "Position de l'installation": "Position of the installation",
@@ -405,7 +442,16 @@
         "Rattrapage": "Catch-up",
         "Sans sonde lisible, les conditions de température sont sans effet : le plugin bouge les volets quand même. C'est voulu — une sonde en panne ne doit pas laisser la maison volets fermés indéfiniment — mais c'est à savoir.": "With no readable sensor, the temperature conditions have no effect: the plugin moves the shutters anyway. That is deliberate — a broken sensor must not leave the house with its shutters closed for ever — but it is worth knowing.",
         "Sonde par défaut": "Default sensor",
-        "Température": "Temperature"
+        "Température": "Temperature",
+        "Facultatif : un luxmètre, une station météo ou un capteur de rayonnement. C'est ce qui dit si le soleil brille, là où le plugin ne sait que où il est — et ce qui permet de ne pas fermer la protection solaire un jour couvert. Réglée ici, elle sert à tous les groupes qui n'en choisissent pas une autre.": "Optional: a lux meter, a weather station or a radiation sensor. It is what tells whether the sun is shining, where the plugin only knows where it is — and what lets you avoid closing for sun protection on an overcast day. Set here, it serves every group that does not choose another one.",
+        "Facultatif : un luxmètre, une station météo ou un capteur de rayonnement. C\\'est ce qui dit si le soleil brille, là où le plugin ne sait que où il est — et ce qui permet de ne pas fermer la protection solaire un jour couvert. Réglée ici, elle sert à tous les groupes qui n\\'en choisissent pas une autre.": "Optional: a lux meter, a weather station or a radiation sensor. It is what tells whether the sun is shining, where the plugin only knows where it is — and what lets you avoid closing for sun protection on an overcast day. Set here, it serves every group that does not choose another one.",
+        "Heures sans nouvelle mesure au-delà desquelles une sonde — température ou luminosité — est considérée comme muette. Une sonde à la pile vide ne dit pas qu'elle s'est tue : Jeedom garde sa dernière valeur, indéfiniment, et une condition jugerait tout l'hiver sur la température d'un après-midi d'octobre. Une sonde muette ne filtre plus rien, comme une sonde absente, et la page du groupe l'affiche « figée ». 0 désactive le contrôle.": "Hours without a new reading after which a sensor — temperature or brightness — is considered silent. A sensor with a flat battery does not say it has gone quiet: Jeedom keeps its last value, indefinitely, and a condition would judge the whole winter on the temperature of an October afternoon. A silent sensor no longer filters anything, like a missing one, and the group page shows it as « frozen ». 0 disables the check.",
+        "Heures sans nouvelle mesure au-delà desquelles une sonde — température ou luminosité — est considérée comme muette. Une sonde à la pile vide ne dit pas qu\\'elle s\\'est tue : Jeedom garde sa dernière valeur, indéfiniment, et une condition jugerait tout l\\'hiver sur la température d\\'un après-midi d\\'octobre. Une sonde muette ne filtre plus rien, comme une sonde absente, et la page du groupe l\\'affiche « figée ». 0 désactive le contrôle.": "Hours without a new reading after which a sensor — temperature or brightness — is considered silent. A sensor with a flat battery does not say it has gone quiet: Jeedom keeps its last value, indefinitely, and a condition would judge the whole winter on the temperature of an October afternoon. A silent sensor no longer filters anything, like a missing one, and the group page shows it as « frozen ». 0 disables the check.",
+        "Luminosité": "Brightness",
+        "Sans sonde lisible, les conditions de luminosité sont sans effet : le moment est joué quand même, comme pour la température.": "With no readable sensor, the brightness conditions have no effect: the moment is played anyway, as for the temperature.",
+        "Sonde muette après": "Sensor silent after",
+        "h": "h",
+        "Millisecondes d'attente entre deux ordres, tous groupes confondus : quand plusieurs groupes tombent à la même minute, le premier volet de l'un attend aussi le dernier de l'autre. Les passerelles radio — le 433 MHz en particulier — perdent les trames envoyées coup sur coup : le volet ne bouge pas, et rien ne le signale, puisque la commande a bien été jouée. C'est la panne la plus difficile à voir du plugin, et elle se corrige en laissant respirer la passerelle. 400 ms conviennent dans la plupart des cas ; 0 envoie tout d'un coup, ce qui ne se justifie que sur une installation entièrement filaire. Les ordres programmés partent en arrière-plan, sans retenir le cron de Jeedom ; l'attente d'un groupe reste plafonnée à 30 secondes.": "Milliseconds to wait between two orders, across all groups: when several groups fall on the same minute, the first shutter of one also waits for the last of the other. Radio gateways — 433 MHz in particular — lose frames sent back to back: the shutter does not move, and nothing reports it, since the command was run. It is the hardest failure of the plugin to spot, and it is fixed by letting the gateway breathe. 400 ms suit most cases; 0 sends everything at once, which only makes sense on a fully wired installation. Scheduled orders are sent in the background, without holding up the Jeedom cron; the wait of one group remains capped at 30 seconds."
     },
     "plugins/voletautobe/plugin_info/install.php": {
         "Nettoyage du cache impossible :": "Could not clean the cache:"

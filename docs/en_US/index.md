@@ -26,6 +26,10 @@ the plugin configuration. A house has one outdoor temperature, not eight:
 setting it once saves you from choosing it group by group, and a group can
 always have its own if need be — the north-facing bedroom, a conservatory.
 
+A brightness sensor — a lux meter, a weather station, a solar radiation sensor —
+is entirely optional. It only serves the brightness conditions, which nobody is
+obliged to set; if you have one, pick it the same way, once for the whole house.
+
 ## One convention to remember: 0% = closed, 100% = open
 
 Everywhere in the plugin, in the interface as in the commands, **0% means closed
@@ -46,7 +50,8 @@ protection, end of protection, evening — and that is all there is to set.
    commands.
 2. **Choose the shutters.** The button opens the selector.
 3. **Shutters tab.** Say which way the facade looks, and pick the temperature
-   sensor if you intend to use the conditions.
+   and brightness sensors if you intend to use the conditions and the plugin's
+   ones do not suit.
 4. **Schedule tab.** Set the morning, set the evening, and the sun protection if
    you want one.
 5. **Save.** There is nothing else to do.
@@ -219,6 +224,36 @@ on the days the sun protection really closed. A day too cool for it to close is 
 day the end of protection has nothing to open, and it keeps quiet. The section
 devoted to it says why, and in which case it still plays entirely on its own.
 
+### A sun protection held back tries again
+
+The sun protection is the only moment that is not decided once and for all.
+Held back by its conditions when the sun arrives — 24 °C at 11 am for a 26 °C
+threshold —, it is not lost for the day: the 29 °C afternoon is precisely what
+it was set up for. It is therefore **evaluated again every minute**, and sets off
+the first time its conditions are met.
+
+The retries last:
+
+- until the day's **end of protection**, if that moment is ticked — closing after
+  the reopening would leave the room at 30% until the evening;
+- otherwise until **the sun leaves the facade**;
+- otherwise until **sunset**;
+
+each time **minus a 30-minute margin**: closing at 5:41 pm to open again at
+5:42 pm is two motor trips for nothing.
+
+The log and the **Last change** command follow the wait without repeating it
+every minute. The first refusal is written with the time limit — "Sun
+protection waiting: 24.1 °C, threshold 26 °C — retrying until 17:30" —, then
+comes either the order, marked "after waiting for the conditions", or "Sun
+protection given up for today: conditions never met". The **Try this moment**
+button says so too: when it answers that the protection would have been
+skipped, it adds that it would have been retried.
+
+The first attempt, for its part, follows the common rule: it must take place at
+the scheduled time or within the catch-up window. A box restarted at 3 pm does
+not start waiting for a protection that was due at 11 am.
+
 ## The temperature condition
 
 Every moment can be made conditional: **none**, **only if the temperature is ≥** a
@@ -257,10 +292,37 @@ The failure still shows: the **Health** page counts the groups that set a
 temperature condition with no readable sensor, and the moment's preview says so
 under the setting.
 
+### A frozen sensor counts as silent
+
+A sensor whose battery dies does not say it has gone quiet: Jeedom keeps its last
+value, indefinitely. A 27 °C read one July afternoon would then close the sun
+protection for the whole following week, rain included, and an October morning
+would judge the entire winter on that single reading.
+
+The plugin therefore looks at the age of the last reading. **Beyond 3 hours
+without a new reading**, the sensor is treated as silent: its value is ignored,
+the condition no longer filters anything, and the moment is played anyway. The
+delay is set in the plugin configuration, field **Sensor silent after**, from 0 to
+168 hours; **0 disables the check**. Three hours let through a weather station
+that only publishes once an hour. A sensor that publishes the same value every
+quarter of an hour is alive and well: it is the collection date that counts, not
+a change of value.
+
+The check applies to temperature and brightness alike, and it shows wherever it
+should:
+
+- the log says "temperature sensor frozen for 5 h, order sent anyway" rather than
+  "silent" — the one calls for a new battery, the other for checking a setting;
+- the group's *Shutters* tab shows "Sensor frozen for 5 h" in orange instead of
+  the reading;
+- the **Health** page counts the groups concerned on a "Frozen sensors" line.
+
 ### The decision is taken only once
 
 The condition is evaluated at the scheduled time, once, and the moment is marked
 played whether it moved or not. It is not replayed during the catch-up window.
+The sun protection is the only exception, for the reasons given above: held
+back, it tries again as long as the sun is on the facade.
 
 That is intentional: without it, a morning skipped at 07:00 for 4 °C would fire
 on its own at 07:12 because the sun had warmed the sensor. A shutter setting off
@@ -271,6 +333,50 @@ what was not done that day will not be done.
 When a moment is skipped, the log and the **Last change** command say so with the
 figures: "Morning skipped: 1.5 °C, threshold 5 °C". You never have to guess why
 the shutters did not move.
+
+## The brightness condition
+
+The plugin knows **where** the sun is, not **whether it shines**. On an overcast
+day at 27 °C, the sun is on the facade — by calculation — and it is hot, but
+nothing beats on the glass: closing three quarters of the way plunges the room
+into gloom for nothing. Only a light reading knows there are clouds.
+
+Every moment can therefore take a **brightness condition**, built exactly like
+the temperature one: **no condition**, **only if the brightness reaches at
+least** a value, or **only if it does not exceed** a value. It is **optional
+everywhere**, sun protection included: no moment sets one on creation, and a
+group saved before this version goes on doing exactly what it did.
+
+The typical use: the sun protection, "only if the brightness reaches at least
+20,000 lx". On a bright sunny day it closes; on a grey day it keeps quiet — and,
+since it tries again every minute, it still closes if the sky clears in the
+afternoon.
+
+**The sensor.** A lux meter, the brightness of a weather station, a solar
+radiation sensor in W/m², or a UV index: all answer the only question asked —
+sun or clouds? — equally well, and many weather stations only publish the last
+two. As for the temperature, it is picked once in the plugin configuration,
+**Brightness** block, and a group can choose its own in its *Shutters* tab; the
+empty option means "the plugin's one". The reading is shown next to it, with its
+unit. The list does not offer the dimming level of lamps, which has nothing to
+say about the sky, nor the "Brightness used" of the plugin's own groups.
+
+**The threshold is written in the sensor's unit.** The plugin converts nothing:
+a threshold of 20,000 makes sense in lux, not in W/m², where you would rather
+write 300 or 400. The unit shown next to the field is that of the sensor the
+group uses, and the reports repeat it. The French-style "20 000", with a space
+for thousands, is accepted.
+
+All the temperature rules apply here:
+
+- **a silent or frozen sensor blocks nothing**: the moment is played anyway, the
+  log says so, the moment's preview writes it in red under the setting, and the
+  **Health** page counts the groups concerned on a "Brightness sensor" line;
+- **a skipped moment gives its figures**: "Sun protection skipped: brightness
+  8,000 lx, threshold 20,000 lx".
+
+When several conditions are set, brightness is looked at last, after the sun and
+the temperature: it is a refinement of the refinement.
 
 ## The sun's position
 
@@ -774,6 +880,7 @@ Configuration → General**.
 | **Position** | slider action | Moves the whole group to a percentage. 0% = closed, 100% = open. |
 | **State** | numeric info | The group's position, the average of those its shutters publish. Logged. |
 | **Temperature used** | numeric info | The reading the conditions were evaluated on. Logged: it is what explains, three days later, why the morning was skipped. |
+| **Brightness used** | numeric info | The brightness sensor's reading, in its unit. Logged, for the same reason; empty as long as no sensor is chosen. |
 | **Last change** | info | "Opened today 07:12 (schedule)", or "Morning skipped: 1.5 °C, threshold 5 °C". Answers "did it work this morning?" on its own. |
 | **Schedule active** | binary info | 0 when the group is paused. Logged. |
 | **Pause** / **Resume** | action | Holiday mode, drivable from a scenario. |
@@ -857,10 +964,43 @@ orders are acknowledged; go up to 800 or 1000 ms if your 433 MHz gateway stays
 temperamental. Eight shutters at 400 ms make 2.8 seconds for the whole group:
 that is invisible on shutters that take twenty seconds to come down.
 
+**The wait also applies between two groups.** It is counted from the last order
+sent, all groups together, and not from the start of each group. In the evening,
+every group set on sunset sets off in the same minute; if the counter started
+from zero again for each group, the living room's last shutter and the bedroom's
+first would leave in the same millisecond — exactly the lost frame the delay
+exists to prevent. The radio gateway does not know which group a frame belongs
+to. Conversely, a group commanded on its own, long after the previous one, waits
+for nothing before its first shutter.
+
 The total wait of a group is capped at **30 seconds**. A group of a hundred
-shutters set to 500 ms would block the cron for fifty seconds, which the Jeedom
-core will not have; beyond the cap the effective delay is reduced accordingly and
-the log notes it at debug level — it is a detail of execution, not an event.
+shutters set to 500 ms would take fifty seconds to send everything; beyond the
+cap the effective delay is reduced accordingly and the log notes it at debug
+level — it is a detail of execution, not an event.
+
+### Scheduled orders are sent in the background
+
+Every plugin's cron runs in the same process as all the others, one after the
+other. Waiting 400 ms between twenty shutters at sunset used to hold back the
+thermostat, the alarm and the scheduled scenarios of the whole installation for
+eight seconds.
+
+The **decision** is still taken in the cron, at the scheduled minute: conditions
+evaluated, moment marked played. Only the **sending** goes into a background task
+of the core — **a single one for the whole minute**, not one per group, otherwise
+two groups would send their frames at the same time again. The orders leave one
+after the other there, with the wait described above.
+
+Sending happens on the spot, as before, when there is nothing to wait for — a
+single shutter to command, or a delay set to 0 —, and also when the background
+task cannot be started: the log then flags it as a warning ("Could not send in
+the background, orders sent on the spot"). A task the core would only start too
+late, beyond the catch-up window — overloaded box, restart —, sends nothing and
+says so: a 9 pm closing does not go out at 3 am.
+
+The group's buttons, the **Open**, **Close** and **Position** commands called
+from a scenario, and the **Try this moment** button always send on the spot:
+there is no cron to hold back there.
 
 ## The Health page
 
@@ -874,6 +1014,8 @@ plugin only counts there the things that do not show any other way:
 | **Paused groups** | the plugin's quietest failure: everything works, and nothing moves. |
 | **Scheduled shutters** | the number of shutters the plugin commands. |
 | **Temperature sensor** | the groups that set a temperature condition with no readable sensor: it filters nothing any more. |
+| **Brightness sensor** | the same for brightness. "Readable or unused": a group with no brightness condition needs no sensor, and does not count. |
+| **Frozen sensors** | the groups one of whose sensors, temperature or brightness, has published nothing for longer than the delay set in the configuration: its last value is ignored. Check the battery or the sensor's plugin. |
 | **Sun window** | the groups that use the sun with no installation position. |
 | **Missing shutters** | the shutters whose device no longer exists in Jeedom. |
 
@@ -931,6 +1073,24 @@ their identifier; the displayed name is refreshed every time the page is opened.
 **My temperature sensor is broken, what happens?** The moments are played anyway,
 without condition. That is deliberate: an automation must not fall silent because
 a sensor has. The Health page counts the groups in that situation.
+
+**My sensor shows a value, but the group says "Frozen sensor".** Its last reading
+is older than the delay in the plugin configuration — 3 h by default. Jeedom
+keeps showing that value everywhere, but the plugin no longer trusts it. Change
+the battery, or check the plugin that publishes it; if it is a sensor that only
+publishes rarely, lengthen the **Sensor silent after** delay, or set it to 0 to
+disable the check.
+
+**My sun protection was skipped in the morning, then closed at 2 pm. Is that
+normal?** Yes. Held back when the sun arrives, it tries again every minute until
+the end of protection, the sun leaving the facade or sunset, minus half an hour,
+and sets off as soon as its conditions are met. The log says "waiting … retrying
+until …" then "after waiting for the conditions".
+
+**How do I avoid closing the sun protection on an overcast day?** With a
+brightness condition — "only if the brightness reaches at least 20,000 lx" — and
+a brightness sensor picked in the plugin configuration or in the group. The
+threshold is written in the sensor's unit.
 
 **How do I find out which way my facade looks?** Open the group at the moment
 the sun strikes it and read the sun's position shown under the Facade block, in

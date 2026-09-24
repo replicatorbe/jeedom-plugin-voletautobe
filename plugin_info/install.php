@@ -189,6 +189,10 @@ function voletautobe_remove() {
                  * que la protection solaire a déjà fermé les volets du jour, et
                  * la fin de protection les rouvrirait sans qu'ils aient bougé. */
                 cache::delete('voletautobe::moved::' . $eqLogic->getId() . '::' . $key);
+                /* Et la marque d'attente de la protection solaire, qui ferait
+                 * sinon réessayer après réinstallation un moment que personne
+                 * n'a évalué ce jour-là. */
+                cache::delete('voletautobe::pending::' . $eqLogic->getId() . '::' . $key);
             } catch (Throwable $e) {
                 log::add('voletautobe', 'debug', __('Nettoyage du cache impossible :', __FILE__) . ' ' . $e->getMessage());
             }

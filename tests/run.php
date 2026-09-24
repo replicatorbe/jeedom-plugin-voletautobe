@@ -1614,6 +1614,58 @@ verifie('aucune ne se prononce : on ne sait pas',
         voletautobeVolets::aggregatePosition(array(null, null)), null);
 verifie('groupe vide : on ne sait pas', voletautobeVolets::aggregatePosition(array()), null);
 
+/* ------------------------------------------------------------ LUMINOSITÉ ---
+ * La condition de luminosité est facultative, et doit le rester à la lettre :
+ * un moment enregistré avant son arrivée n'a pas de lux_mode, et il doit se
+ * jouer exactement comme avant. Le reste est calqué sur la température, y
+ * compris la règle qui compte le plus — une sonde muette laisse passer. */
+echo "\nCondition de luminosité\n";
+$ancien = voletautobeSun::cleanSlot(array('enable' => 1, 'temp_mode' => 'min', 'temp_value' => 26));
+verifie('moment ancien : aucune condition', $ancien['lux_mode'], 'none');
+verifie('moment ancien : passe sans sonde', voletautobeSun::luxCheck($ancien, null)['met'], true);
+verifie('moment ancien : passe dans le noir', voletautobeSun::luxCheck($ancien, 0)['reason'], 'none');
+verifie('mode inconnu retombe sur aucune',
+        voletautobeSun::cleanSlot(array('lux_mode' => 'lune'))['lux_mode'], 'none');
+verifie('mode vide retombe sur aucune',
+        voletautobeSun::cleanSlot(array('lux_mode' => ''))['lux_mode'], 'none');
+verifie('« 20 000 » garde ses milliers', voletautobeSun::cleanLux('20 000'), 20000.0);
+verifie('espace insécable acceptée', voletautobeSun::cleanLux("20\u{00A0}000"), 20000.0);
+verifie('virgule décimale', voletautobeSun::cleanLux('6,5'), 6.5);
+verifie('plafond', voletautobeSun::cleanLux('9999999'), voletautobeSun::LUX_MAX_VALUE);
+verifie('plancher', voletautobeSun::cleanLux('-3'), 0.0);
+
+$couvert = voletautobeSun::cleanSlot(array('lux_mode' => 'min', 'lux_value' => '20 000'));
+$verdict = voletautobeSun::luxCheck($couvert, 8000);
+verifie('jour couvert : écarté', $verdict['met'], false);
+verifie('jour couvert : trop sombre', $verdict['reason'], 'too_dark');
+verifie('plein soleil : joué', voletautobeSun::luxCheck($couvert, 65000)['met'], true);
+verifie('seuil atteint pile : joué', voletautobeSun::luxCheck($couvert, 20000)['met'], true);
+$verdict = voletautobeSun::luxCheck($couvert, null);
+verifie('sonde muette : on bouge', $verdict['met'], true);
+verifie('sonde muette : on le sait', $verdict['known'], false);
+verifie('zéro lux est une mesure', voletautobeSun::luxCheck($couvert, 0)['known'], true);
+$sombre = voletautobeSun::cleanSlot(array('lux_mode' => 'max', 'lux_value' => 50));
+verifie('plafond dépassé : trop clair', voletautobeSun::luxCheck($sombre, 300)['reason'], 'too_bright');
+verifie('sous le plafond : joué', voletautobeSun::luxCheck($sombre, 10)['met'], true);
+
+/* Reconnaissance : un luminaire est une lampe, une girouette publie des
+ * degrés, et aucune des deux ne dit si le ciel est couvert. */
+echo "\nReconnaissance des sondes de luminosité\n";
+$info = array('type' => 'info', 'subType' => 'numeric');
+verifieVrai('type générique BRIGHTNESS',
+            voletautobeVolets::isLuminosity($info + array('name' => 'x', 'generic' => 'BRIGHTNESS')));
+verifieVrai('type générique UV', voletautobeVolets::isLuminosity($info + array('name' => 'x', 'generic' => 'UV')));
+verifieVrai('unité lx', voletautobeVolets::isLuminosity($info + array('name' => 'x', 'unit' => 'lx')));
+verifieVrai('unité W/m²', voletautobeVolets::isLuminosity($info + array('name' => 'x', 'unit' => 'W/m²')));
+verifieVrai('nom Luminosité', voletautobeVolets::isLuminosity($info + array('name' => 'Luminosité')));
+verifieVrai('nom Indice UV', voletautobeVolets::isLuminosity($info + array('name' => 'Indice UV')));
+verifie('un luminaire n\'en est pas une', voletautobeVolets::isLuminosity($info + array('name' => 'Luminaire')), false);
+verifie('LIGHT_BRIGHTNESS : une lampe',
+        voletautobeVolets::isLuminosity($info + array('name' => 'x', 'generic' => 'LIGHT_BRIGHTNESS')), false);
+verifie('« Ouverture » ne contient pas d\'UV', voletautobeVolets::isLuminosity($info + array('name' => 'Ouverture')), false);
+verifie('une action n\'est pas une mesure',
+        voletautobeVolets::isLuminosity(array('type' => 'action', 'subType' => 'slider', 'name' => 'Luminosité')), false);
+
 /* ---------------------------------------------------------------- BILAN --- */
 echo "\n";
 if ($ko == 0) {

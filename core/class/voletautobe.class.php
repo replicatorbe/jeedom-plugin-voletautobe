@@ -101,6 +101,47 @@ class voletautobe extends eqLogic {
      * arrêter la programmation de toute la maison. */
     const ORDER_SPREAD_MAX = 30;
 
+    /*
+     * L'âge au-delà duquel une mesure ne vaut plus rien, en heures.
+     *
+     * Une sonde dont la pile meurt ne se tait pas : elle garde sa dernière
+     * valeur, et le cache du coeur la sert indéfiniment. Un 27 °C relevé un
+     * après-midi de juillet ferait alors fermer la protection solaire tous les
+     * jours de la semaine suivante, pluie comprise, sans que rien ne le dise.
+     * Passé ce délai sans nouvelle mesure, la sonde est traitée comme muette —
+     * c'est-à-dire que le moment se joue et que le journal le dit. Trois heures
+     * laissent passer une station météo qui ne publie qu'une fois l'heure.
+     * Réglable dans la configuration du plugin, 0 pour ne jamais douter.
+     */
+    const DEFAULT_SENSOR_MAX_AGE = 3;
+    const SENSOR_MAX_AGE_MAX     = 168;
+
+    /*
+     * La marge de la protection solaire qui attend.
+     *
+     * Une protection écartée à l'arrivée du soleil — 24 °C pour un seuil de
+     * 26 °C — se réessaie tant que le soleil est sur la façade. Mais pas
+     * jusqu'à la dernière minute : fermer à 17 h 41 pour rouvrir à 17 h 42,
+     * c'est deux trajets de moteur pour rien. La fenêtre des nouveaux essais se
+     * referme donc une demi-heure avant la fin de la protection.
+     */
+    const HEAT_RETRY_MARGIN = 1800;
+
+    /*
+     * L'instant du dernier ordre envoyé par ce processus, en secondes à la
+     * microseconde près.
+     *
+     * Statique et non propre au groupe : l'attente entre deux ordres protège la
+     * passerelle radio, et la passerelle ne sait pas à quel groupe appartient
+     * une trame. Le soir, tous les groupes réglés sur le coucher du soleil
+     * tombent à la même minute ; si le compteur repartait de zéro à chaque
+     * groupe, le dernier volet du salon et le premier de la chambre partiraient
+     * dans la même milliseconde — exactement la perte de trame que l'attente
+     * existe pour éviter. Le souligné initial n'est pas décoratif : voir
+     * CLAUDE.md, le coeur prend toute propriété sans souligné pour une colonne.
+     */
+    private static $_lastOrderAt = 0.0;
+
     /* Jours en toutes lettres : IntlDateFormatter n'est pas garanti présent sur
      * toutes les installations Jeedom. */
     public static $_days = array(1 => 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche');
@@ -114,12 +155,136 @@ class voletautobe extends eqLogic {
      */
     public static function cron() {
         $now = time();
+        $jobs = array();
         foreach (self::byType(__CLASS__, true) as $eqLogic) {
             try {
-                $eqLogic->runSchedule($now);
+                $jobs = array_merge($jobs, $eqLogic->runSchedule($now));
             } catch (Throwable $e) {
                 // Un groupe en échec ne doit pas priver les autres de leur matin.
                 log::add(__CLASS__, 'error', $eqLogic->getHumanName() . ' : ' . $e->getMessage());
+            }
+        }
+        if (count($jobs) > 0) {
+            self::dispatchJobs($jobs);
+        }
+    }
+
+    /* ============================================================ ENVOI DIFFÉRÉ */
+
+    /*
+     * Les ordres de la minute, envoyés hors du cron du coeur.
+     *
+     * Le cron de chaque plugin tourne dans le même processus que celui de tous
+     * les autres, l'un après l'autre. L'attente entre deux ordres — 400 ms par
+     * volet, jusqu'à trente secondes pour un grand groupe — tenait donc en
+     * otage la minute de toute l'installation : vingt volets au coucher du
+     * soleil, et le thermostat, l'alarme et les scénarios programmés partaient
+     * huit secondes en retard.
+     *
+     * La décision reste prise ici, dans le cron, à la minute dite : les
+     * conditions sont évaluées, le moment est marqué joué. Seul l'envoi part en
+     * arrière-plan, dans UNE tâche pour toute la minute et non une par groupe :
+     * c'est ce qui garde l'attente entre deux groupes. Deux tâches parallèles
+     * enverraient leurs trames en même temps, et on aurait déplacé la panne au
+     * lieu de la corriger.
+     *
+     * Quand il n'y a rien à attendre — un seul volet, ou une attente réglée à
+     * zéro — l'envoi se fait sur place : une tâche de fond pour un seul ordre
+     * coûterait plus qu'elle n'épargne.
+     */
+    private static function dispatchJobs($_jobs) {
+        $orders = 0;
+        foreach ($_jobs as $job) {
+            $eqLogic = self::byId($job['eq']);
+            $volets = is_object($eqLogic) ? $eqLogic->getConfiguration('volets') : array();
+            $orders += is_array($volets) ? count($volets) : 0;
+        }
+        if ($orders <= 1 || self::orderDelay() == 0) {
+            self::sendJobs($_jobs);
+            return;
+        }
+
+        $task = null;
+        try {
+            $task = new cron();
+            $task->setClass(__CLASS__);
+            $task->setFunction('sendOrders');
+            /* Les options ne sont jamais vides, et portent l'heure : le coeur
+             * fusionne sinon deux tâches de même classe et même fonction
+             * (cron::preSave), et la minute suivante écraserait celle-ci. */
+            $task->setOption(array('jobs' => $_jobs, 'planned' => time()));
+            $task->setOnce(1);
+            $task->setSchedule(cron::convertDateToCron(time()));
+            /* En minutes : le plafond d'un groupe, trente secondes, fois
+             * quelques groupes, plus une de marge. Le maître des tâches ne doit
+             * pas tuer un envoi légitime au milieu d'une façade. */
+            $task->setTimeout(5);
+            $task->save();
+            /* Datée de cette minute, la tâche n'est pas vue comme due par le
+             * maître des tâches, qui la lancerait une seconde fois
+             * (cron::isDue). Posé après save(), qui donne l'identifiant. */
+            $task->setLastRun(date('Y-m-d H:i:s'));
+            $task->run();
+            return;
+        } catch (Throwable $e) {
+            /* Le repli est l'envoi sur place, comme avant : le moment est déjà
+             * marqué joué, un ordre abandonné ici ne repartirait jamais. Un
+             * cron du coeur en retard de quelques secondes, une fois, coûte
+             * moins cher qu'une maison restée volets ouverts. */
+            log::add(__CLASS__, 'warning', __('Envoi en arrière-plan impossible, ordres envoyés sur place :', __FILE__)
+                   . ' ' . $e->getMessage());
+            if (is_object($task) && $task->getId() != '') {
+                try {
+                    $task->remove(false);
+                } catch (Throwable $f) {
+                }
+            }
+        }
+        self::sendJobs($_jobs);
+    }
+
+    /*
+     * Le point d'entrée de la tâche de fond, appelé par jeeCron.php.
+     *
+     * Une tâche lancée trop tard n'envoie rien : si le maître des tâches ne l'a
+     * reprise que longtemps après — box surchargée, redémarrage — la même règle
+     * que pour un moment manqué s'applique, et une fermeture de 21 h ne part
+     * pas à 3 h du matin.
+     */
+    public static function sendOrders($_options = array()) {
+        $jobs = (is_array($_options) && isset($_options['jobs']) && is_array($_options['jobs'])) ? $_options['jobs'] : array();
+        $planned = isset($_options['planned']) ? (int) $_options['planned'] : time();
+        if ((time() - $planned) > self::graceSeconds()) {
+            log::add(__CLASS__, 'warning', __('Ordres abandonnés : la tâche d\'envoi a démarré trop tard.', __FILE__)
+                   . ' (' . date('H:i', $planned) . ')');
+            return;
+        }
+        self::sendJobs($jobs);
+    }
+
+    /*
+     * Envoie les ordres décidés par runSchedule(), l'un après l'autre.
+     *
+     * La marque de mouvement est posée ici, après l'envoi, et seulement si un
+     * ordre est parti : un groupe vide, ou dont tous les volets ont échoué,
+     * n'a rien fermé, et la fin de protection n'aurait rien à rouvrir. Voir
+     * movedKey().
+     */
+    private static function sendJobs($_jobs) {
+        foreach ($_jobs as $job) {
+            $eqLogic = null;
+            try {
+                $eqLogic = self::byId($job['eq']);
+                if (!is_object($eqLogic)) {
+                    continue;
+                }
+                $result = $eqLogic->applyAction($job['action'], $job['position'], true, 'schedule');
+                if ($result['sent'] > 0) {
+                    cache::set($eqLogic->movedKey($job['key']), $job['day'], self::DONE_MEMORY);
+                }
+            } catch (Throwable $e) {
+                log::add(__CLASS__, 'error', (is_object($eqLogic) ? $eqLogic->getHumanName() : ('#' . $job['eq']))
+                       . ' : ' . $e->getMessage());
             }
         }
     }
@@ -188,6 +353,17 @@ class voletautobe extends eqLogic {
     public static function orderDelay() {
         return max(0, min(self::ORDER_DELAY_MAX,
             (int) config::byKey('order_delay', __CLASS__, self::DEFAULT_ORDER_DELAY)));
+    }
+
+    /* L'âge maximal d'une mesure, en secondes, ou 0 pour ne jamais douter. Un
+     * champ vidé reprend la valeur de départ : (int) '' vaudrait 0, et le
+     * contrôle disparaîtrait sans que personne l'ait décidé. */
+    public static function sensorMaxAge() {
+        $hours = config::byKey('sensor_max_age', __CLASS__, '');
+        if ($hours === '' || $hours === null) {
+            $hours = self::DEFAULT_SENSOR_MAX_AGE;
+        }
+        return max(0, min(self::SENSOR_MAX_AGE_MAX, (int) $hours)) * 3600;
     }
 
     /* ===================================================== CYCLE DE VIE eqLogic */
@@ -294,6 +470,7 @@ class voletautobe extends eqLogic {
              * sous le même identifiant croirait sa protection solaire déjà
              * jouée le jour même. */
             cache::delete($this->movedKey($key));
+            cache::delete($this->pendingKey($key));
         }
         message::removeAll(__CLASS__, $this->failureKey());
     }
@@ -301,10 +478,10 @@ class voletautobe extends eqLogic {
     /* ============================================================== COMMANDES */
 
     /*
-     * Dix-neuf commandes, dont quatre visibles.
+     * Vingt commandes, dont quatre visibles.
      *
      * Le reste sert aux scénarios et à l'historique, et reste masqué : une
-     * tuile de tableau de bord qui empile dix-neuf widgets ne se lit plus.
+     * tuile de tableau de bord qui empile vingt widgets ne se lit plus.
      * L'utilisateur réaffiche ce qu'il veut, c'est une décision qui lui
      * appartient — mais elle ne doit pas lui être imposée à l'installation.
      *
@@ -335,6 +512,12 @@ class voletautobe extends eqLogic {
                   'visible' => 0, 'historized' => 1, 'icon' => ''),
             array('logicalId' => 'temperature', 'name' => __('Température retenue', __FILE__),
                   'type' => 'info', 'subType' => 'numeric', 'generic' => 'TEMPERATURE',
+                  'visible' => 0, 'historized' => 1, 'icon' => ''),
+            /* Créée pour tous les groupes, même sans sonde : une commande qui
+             * n'apparaîtrait qu'une fois la sonde choisie changerait l'ordre
+             * des autres et surprendrait les scénarios qui s'y réfèrent. */
+            array('logicalId' => 'luminosity', 'name' => __('Luminosité retenue', __FILE__),
+                  'type' => 'info', 'subType' => 'numeric', 'generic' => 'BRIGHTNESS',
                   'visible' => 0, 'historized' => 1, 'icon' => ''),
             array('logicalId' => 'last', 'name' => __('Dernier changement', __FILE__),
                   'type' => 'info', 'subType' => 'string', 'generic' => '',
@@ -621,6 +804,20 @@ class voletautobe extends eqLogic {
         return __CLASS__ . '::moved::' . $this->getId() . '::' . $_key;
     }
 
+    /*
+     * La troisième marque : une protection solaire écartée qui attend son
+     * heure.
+     *
+     * Posée au premier contrôle manqué, dans le délai de rattrapage, et c'est
+     * elle seule qui autorise les nouveaux essais passé ce délai. Sans elle,
+     * une box redémarrée à 15 h évaluerait pour la première fois une
+     * protection due à 11 h — ce que la règle du rattrapage interdit
+     * justement. Même durée de vie et même nettoyage que les deux autres.
+     */
+    public function pendingKey($_key) {
+        return __CLASS__ . '::pending::' . $this->getId() . '::' . $_key;
+    }
+
     public function failureKey() {
         return __CLASS__ . '::failure::' . $this->getId();
     }
@@ -652,22 +849,30 @@ class voletautobe extends eqLogic {
          * fera à la reprise : c'est ce qui permet de vérifier d'un coup d'oeil
          * qu'on a bien suspendu le bon groupe, et que rien ne bougera demain
          * matin.
+         *
+         * Rend les ordres décidés, sans les envoyer : c'est cron() qui les
+         * rassemble pour toute la maison et les envoie d'un seul tenant. Voir
+         * dispatchJobs().
          */
-        $fired = false;
+        $jobs = array();
         if (!$this->isPaused()) {
             foreach (self::SLOTS as $key) {
-                $fired = $this->runSlot($key, $now) || $fired;
+                $job = $this->runSlot($key, $now);
+                if ($job !== null) {
+                    $jobs[] = $job;
+                }
             }
         }
-        $this->refreshInfo($now, !$fired);
+        $this->refreshInfo($now, count($jobs) == 0);
+        return $jobs;
     }
 
     /*
      * Un moment, à l'instant où il est dû.
      *
-     * Rend vrai si un ordre vient d'être envoyé : l'appelant saura qu'il ne
-     * faut pas relire la position des volets dans la foulée, un tablier met
-     * vingt secondes à descendre.
+     * Rend l'ordre à envoyer — array('eq', 'key', 'action', 'position', 'day')
+     * — ou null. L'appelant saura aussi qu'il ne faut pas relire la position
+     * des volets dans la foulée, un tablier met vingt secondes à descendre.
      *
      * La décision se prend une fois, à l'heure dite. Le moment est marqué joué
      * AVANT que ses conditions ne soient évaluées, et il le reste même si
@@ -678,28 +883,67 @@ class voletautobe extends eqLogic {
      * que le soleil a chauffé la sonde d'un dixième de degré.
      * « Il fait trop froid ce matin » est une décision de la journée, pas une
      * mesure qu'on reprend de minute en minute.
+     *
+     * LA PROTECTION SOLAIRE FAIT EXCEPTION, et l'exception tient au sens du
+     * moment. Écartée à l'arrivée du soleil — 24 °C à 11 h pour un seuil de
+     * 26 °C — elle était perdue pour la journée, alors qu'il faisait 29 °C à
+     * 14 h et que c'est précisément pour cet après-midi-là qu'on l'avait
+     * réglée. Elle se réessaie donc chaque minute tant que le soleil est sur la
+     * façade, et part la première fois que ses conditions sont réunies. Le
+     * piège du matin n'existe pas ici : on ne ferme qu'une fois, et rien ne
+     * rouvre sur ces conditions — c'est le rôle de la fin de protection, à son
+     * heure à elle.
      */
     private function runSlot($_key, $_now) {
         $slot = $this->slotConfig($_key);
         if ($slot['enable'] != 1) {
-            return false;
+            return null;
         }
         $location = self::location();
+        $grace = self::graceSeconds();
+        $retry = ($_key == 'heat');
+        /* Pour la protection, l'occurrence est cherchée sur la journée entière :
+         * c'est la marque d'attente, plus bas, qui décide si l'on a encore le
+         * droit de s'en occuper. */
         $due = voletautobeSun::dueOccurrence(
             $slot, $_now, $location['latitude'], $location['longitude'],
-            $this->seed($_key), self::graceSeconds()
+            $this->seed($_key), $retry ? 86400 : $grace
         );
         if ($due === null) {
-            return false;
+            return null;
         }
 
         /* Déjà joué aujourd'hui : le cron repasse toutes les minutes pendant
          * tout le délai de grâce. */
         $doneKey = $this->doneKey($_key);
         if (cache::byKey($doneKey)->getValue('') === $due['day']) {
-            return false;
+            return null;
         }
-        cache::set($doneKey, $due['day'], self::DONE_MEMORY);
+
+        $pendingKey = $this->pendingKey($_key);
+        $pending = $retry && (cache::byKey($pendingKey)->getValue('') === $due['day']);
+        if (!$pending && ($_now - $due['timestamp']) > $grace) {
+            /* Passé le rattrapage sans avoir jamais été évalué : une box
+             * redémarrée l'après-midi ne rattrape pas la protection du matin. */
+            return null;
+        }
+
+        $until = $retry ? $this->heatRetryUntil($due) : 0;
+        if ($pending && $_now > $until) {
+            /* Le soleil a quitté la façade sans que les conditions soient
+             * jamais réunies : la journée est close. Le compte rendu du premier
+             * saut est déjà dans le journal et dans « Dernier changement ». */
+            cache::set($doneKey, $due['day'], self::DONE_MEMORY);
+            cache::delete($pendingKey);
+            log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . self::slotName($_key) . ' '
+                   . __('abandonnée pour aujourd\'hui : conditions jamais réunies', __FILE__));
+            return null;
+        }
+        /* Les autres moments sont marqués joués avant tout contrôle, voir plus
+         * haut. La protection ne l'est qu'une fois partie, ou abandonnée. */
+        if (!$retry) {
+            cache::set($doneKey, $due['day'], self::DONE_MEMORY);
+        }
 
         /*
          * Le couplage protection / fin de protection, avant toute condition.
@@ -714,71 +958,171 @@ class voletautobe extends eqLogic {
             $text = self::shadeEndSkipText();
             log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . $text);
             $this->checkAndUpdateCmd('last', $text . ' ' . self::humanDate(time()));
-            return false;
+            return null;
         }
 
-        /*
-         * La condition de soleil, sur la position de l'instant.
-         *
-         * Elle s'évalue avant celle de température, et l'ordre se lit dans le
-         * compte rendu : une protection solaire un jour couvert à 27 °C ne doit
-         * pas être annoncée comme sautée parce qu'il fait trop chaud alors que
-         * la vraie raison est que le soleil n'est pas sur cette façade. C'est
-         * aussi la plus fréquente des deux : la température passe le seuil tous
-         * les jours d'un même épisode de chaleur, le soleil ne fait que
-         * traverser la fenêtre d'azimut.
-         *
-         * sunCheck() rend met=true quand la position du soleil n'est pas
-         * calculable, c'est-à-dire quand la position de l'installation n'est
-         * pas renseignée. Même règle que pour la sonde muette, et pour la même
-         * raison : la condition est un raffinement, le mouvement est le
-         * comportement normal — en cas de doute on bouge, et on le dit ici.
-         */
-        $sun = self::sunNow($_now);
-        $sunCheck = voletautobeSun::sunCheck($slot, $sun['azimuth'], $sun['elevation']);
-
-        if (!$sunCheck['met']) {
-            $text = $this->sunSkipText($_key, $slot, $sun, $sunCheck['reason']);
+        $verdict = $this->evaluateConditions($_key, $slot, $_now);
+        if (!$verdict['met']) {
+            if ($retry && $_now < $until) {
+                /* Le premier refus se dit, avec l'heure jusqu'à laquelle on
+                 * réessaie ; les suivants se taisent, sans quoi le journal
+                 * répéterait la même phrase chaque minute de l'après-midi. */
+                if (!$pending) {
+                    cache::set($pendingKey, $due['day'], self::DONE_MEMORY);
+                    $text = self::waitPrefix($_key) . $verdict['reason']
+                          . ' — ' . __('nouvel essai jusqu\'à', __FILE__) . ' ' . date('H:i', $until);
+                    log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . $text);
+                    $this->checkAndUpdateCmd('last', $text . ' ' . self::humanDate(time()));
+                } else {
+                    log::add(__CLASS__, 'debug', $this->getHumanName() . ' — ' . self::waitPrefix($_key) . $verdict['reason']);
+                }
+                return null;
+            }
+            if ($retry) {
+                cache::set($doneKey, $due['day'], self::DONE_MEMORY);
+                cache::delete($pendingKey);
+            }
+            $text = self::skipPrefix($_key) . $verdict['reason'];
             log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . $text);
             $this->checkAndUpdateCmd('last', $text . ' ' . self::humanDate(time()));
-            return false;
+            return null;
         }
 
-        /*
-         * La condition de température, sur la mesure de l'instant.
-         *
-         * temperatureCheck() rend met=true quand la sonde est muette : une
-         * sonde en panne ne doit pas laisser la maison volets fermés
-         * indéfiniment. La condition est un raffinement, le mouvement est le
-         * comportement normal — en cas de doute on bouge, et on le dit ici,
-         * parce que c'est la seule trace qui permettra de comprendre pourquoi
-         * les volets se sont ouverts un matin de gel.
-         */
-        $temperature = $this->temperature();
-        $check = voletautobeSun::temperatureCheck($slot, $temperature);
-
-        if (!$check['met']) {
-            $text = $this->skipText($_key, $slot, $temperature);
-            log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . $text);
-            $this->checkAndUpdateCmd('last', $text . ' ' . self::humanDate(time()));
-            return false;
+        if ($retry) {
+            cache::set($doneKey, $due['day'], self::DONE_MEMORY);
+            cache::delete($pendingKey);
         }
-
         log::add(__CLASS__, 'info', $this->getHumanName() . ' — ' . self::slotName($_key) . ' : '
                . self::orderName($slot['action'], $slot['position'])
-               . ' ' . __('à', __FILE__) . ' ' . date('H:i', $due['timestamp'])
-               . ' (' . self::humanSlot($slot) . ')'
-               . ($check['known'] ? '' : ' — ' . __('sonde muette, ordre envoyé quand même', __FILE__))
-               . ($sunCheck['known'] ? '' : ' — ' . __('position du soleil inconnue, ordre envoyé quand même', __FILE__)));
+               . ' ' . __('à', __FILE__) . ' ' . date('H:i', $pending ? $_now : $due['timestamp'])
+               . ' (' . self::humanSlot($slot, $this->luxUnit()) . ')'
+               . ($pending ? ' — ' . __('après attente des conditions', __FILE__) : '')
+               . (count($verdict['notes']) > 0 ? ' — ' . implode(', ', $verdict['notes']) : ''));
 
-        $result = $this->applyAction($slot['action'], $slot['position'], true, 'schedule');
-        /* La marque de mouvement, et seulement si un ordre est parti : un
-         * groupe vide, ou dont tous les volets ont échoué, n'a rien fermé, et
-         * la fin de protection n'aurait rien à rouvrir. Voir movedKey(). */
-        if ($result['sent'] > 0) {
-            cache::set($this->movedKey($_key), $due['day'], self::DONE_MEMORY);
+        return array(
+            'eq'       => (int) $this->getId(),
+            'key'      => $_key,
+            'action'   => $slot['action'],
+            'position' => $slot['position'],
+            'day'      => $due['day'],
+        );
+    }
+
+    /*
+     * Les trois conditions d'un moment, sur les mesures de l'instant.
+     *
+     * Rend array('met' => bool, 'reason' => string, 'notes' => array) : le
+     * motif du premier refus, ou les réserves d'un accord donné faute de
+     * savoir. Un seul endroit pour l'ordre des contrôles, que runSlot() et
+     * l'essai partagent : le compte rendu de l'essai doit désigner la même
+     * cause que le journal du lendemain.
+     *
+     * La condition de soleil d'abord : une protection solaire un jour couvert
+     * à 27 °C ne doit pas être annoncée comme sautée parce qu'il fait trop
+     * chaud alors que la vraie raison est que le soleil n'est pas sur cette
+     * façade. C'est aussi la plus fréquente : la température passe le seuil
+     * tous les jours d'un même épisode de chaleur, le soleil ne fait que
+     * traverser la fenêtre d'azimut. La luminosité vient en dernier : elle est
+     * facultative, et c'est un raffinement du raffinement.
+     *
+     * Une sonde muette, figée ou une position du soleil incalculable laissent
+     * passer l'ordre : la condition est un raffinement, le mouvement est le
+     * comportement normal — en cas de doute on bouge, et on le dit, parce que
+     * c'est la seule trace qui permettra de comprendre pourquoi les volets se
+     * sont ouverts un matin de gel.
+     */
+    private function evaluateConditions($_key, $_slot, $_now = null) {
+        $notes = array();
+
+        $sun = self::sunNow($_now);
+        $sunCheck = voletautobeSun::sunCheck($_slot, $sun['azimuth'], $sun['elevation']);
+        if (!$sunCheck['met']) {
+            return array('met' => false, 'reason' => self::sunReason($_slot, $sun, $sunCheck['reason']), 'notes' => $notes);
         }
-        return true;
+        if (!$sunCheck['known']) {
+            $notes[] = __('position du soleil inconnue, ordre envoyé quand même', __FILE__);
+        }
+
+        $temperature = $this->temperatureState();
+        $check = voletautobeSun::temperatureCheck($_slot, $temperature['value']);
+        if (!$check['met']) {
+            return array('met' => false, 'reason' => self::temperatureReason($_slot, $temperature['value']), 'notes' => $notes);
+        }
+        if (!$check['known']) {
+            $notes[] = self::sensorNote(__('sonde de température', __FILE__), $temperature);
+        }
+
+        $lux = $this->luxState();
+        $luxCheck = voletautobeSun::luxCheck($_slot, $lux['value']);
+        if (!$luxCheck['met']) {
+            return array('met' => false, 'reason' => self::luxReason($_slot, $lux['value'], $this->luxUnit()), 'notes' => $notes);
+        }
+        if (!$luxCheck['known']) {
+            $notes[] = self::sensorNote(__('sonde de luminosité', __FILE__), $lux);
+        }
+
+        return array('met' => true, 'reason' => '', 'notes' => $notes);
+    }
+
+    /* « sonde de température muette, ordre envoyé quand même », ou « figée
+     * depuis 5 h » : la différence dit s'il faut changer une pile ou vérifier
+     * un réglage. */
+    private static function sensorNote($_label, $_state) {
+        if ($_state['stale']) {
+            return $_label . ' ' . __('figée depuis', __FILE__) . ' ' . self::formatAge($_state['age'])
+                 . ', ' . __('ordre envoyé quand même', __FILE__);
+        }
+        return $_label . ' ' . __('muette, ordre envoyé quand même', __FILE__);
+    }
+
+    /* « 5 h », « 2 j » : l'ordre de grandeur suffit, c'est un signal de panne. */
+    public static function formatAge($_seconds) {
+        $hours = (int) floor(((int) $_seconds) / 3600);
+        if ($hours >= 48) {
+            return ((int) floor($hours / 24)) . ' ' . __('j', __FILE__);
+        }
+        return $hours . ' ' . __('h', __FILE__);
+    }
+
+    /*
+     * Jusqu'à quand une protection écartée se réessaie.
+     *
+     * Jusqu'à la fin de protection du jour quand elle est cochée : une
+     * protection qui fermerait après la réouverture laisserait la pièce à
+     * 30 % jusqu'au soir, exactement ce que la fin de protection existe pour
+     * éviter. Sinon jusqu'à ce que le soleil quitte la façade, et à défaut
+     * jusqu'au coucher. Toujours moins la marge : voir HEAT_RETRY_MARGIN.
+     *
+     * Quand la fenêtre est déjà close — une fin de protection réglée avant la
+     * protection — l'heure rendue est celle du moment lui-même : pas de nouvel
+     * essai, la protection se décide une fois comme les autres moments.
+     */
+    private function heatRetryUntil($_due) {
+        $location = self::location();
+        $day = strtotime($_due['day'] . ' 12:00:00');
+        $candidates = array();
+
+        /* Une fin de protection prévue ce jour-là est la seule borne qui
+         * compte, même si elle tombe avant la protection : aller chercher plus
+         * loin ferait fermer après la réouverture. */
+        $shadeEnd = $this->slotConfig('shade_end');
+        $shadeEndAt = ($shadeEnd['enable'] == 1)
+            ? voletautobeSun::occurrence($shadeEnd, $day, $location['latitude'], $location['longitude'], $this->seed('shade_end'))
+            : null;
+        if ($shadeEndAt !== null) {
+            return max($_due['timestamp'], $shadeEndAt - self::HEAT_RETRY_MARGIN);
+        }
+        $window = voletautobeSun::facadeWindow($this->slotConfig('heat'), $day, $location['latitude'], $location['longitude']);
+        $candidates[] = $window['out'];
+        $sun = voletautobeSun::sun($day, $location['latitude'], $location['longitude']);
+        $candidates[] = $sun['sunset'];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate !== null && ($candidate - self::HEAT_RETRY_MARGIN) > $_due['timestamp']) {
+                return $candidate - self::HEAT_RETRY_MARGIN;
+            }
+        }
+        return $_due['timestamp'];
     }
 
     /*
@@ -836,13 +1180,6 @@ class voletautobe extends eqLogic {
         return __('la protection solaire n\'a pas eu lieu aujourd\'hui', __FILE__);
     }
 
-    /* « Le matin sauté : 1,5 °C, seuil 5 °C ». La mesure et le seuil, tous les
-     * deux : « trop froid » seul obligerait à ouvrir la configuration pour
-     * savoir de combien on a manqué le seuil. */
-    private function skipText($_key, $_slot, $_temperature) {
-        return self::skipPrefix($_key) . self::temperatureReason($_slot, $_temperature);
-    }
-
     /* Le motif seul — « 1,5 °C, seuil 5 °C » —, sans le moment ni le fait qu'il
      * a été sauté. Deux phrases l'emploient : le compte rendu du saut réel, à
      * l'heure dite, et celui de l'essai, qui dit ce qui se serait passé. Les
@@ -852,16 +1189,6 @@ class voletautobe extends eqLogic {
             ? __('sonde muette', __FILE__)
             : self::formatTemperature($_temperature);
         return $measured . ', ' . __('seuil', __FILE__) . ' ' . self::formatTemperature($_slot['temp_value']);
-    }
-
-    /* « Protection solaire sauté : soleil à 8,4°, minimum 15° », « Protection
-     * solaire sauté : soleil au 112° (est-sud-est), fenêtre 135°–315° ». La
-     * position relevée et le réglage, tous les deux, pour la même raison que
-     * pour la température : c'est ce qui permet de corriger la fenêtre sans
-     * ouvrir la configuration. La hauteur d'abord, parce qu'un soleil sous
-     * l'horizon a un azimut parfaitement défini et parfaitement hors sujet. */
-    private function sunSkipText($_key, $_slot, $_sun, $_reason) {
-        return self::skipPrefix($_key) . self::sunReason($_slot, $_sun, $_reason);
     }
 
     /* Le motif seul, pour la même raison que temperatureReason(). */
@@ -879,6 +1206,20 @@ class voletautobe extends eqLogic {
      * qu'il n'a rien envoyé. Ce qui suit est le motif, et lui seul change. */
     private static function skipPrefix($_key) {
         return self::slotName($_key) . ' ' . __('sauté :', __FILE__) . ' ';
+    }
+
+    /* Le compte rendu d'une protection qui attend, et qui n'est donc pas encore
+     * sautée : « sautée » ferait croire la journée perdue alors qu'elle peut
+     * encore partir à 14 h. */
+    private static function waitPrefix($_key) {
+        return self::slotName($_key) . ' ' . __('en attente :', __FILE__) . ' ';
+    }
+
+    /* « 8 000 lx, seuil 20 000 lx ». Le motif seul, comme temperatureReason().
+     * Une sonde muette n'arrive jamais ici : elle laisse passer l'ordre. */
+    private static function luxReason($_slot, $_lux, $_unit) {
+        return __('luminosité', __FILE__) . ' ' . self::formatLux($_lux, $_unit)
+             . ', ' . __('seuil', __FILE__) . ' ' . self::formatLux($_slot['lux_value'], $_unit);
     }
 
     /* ================================================================== ESSAI */
@@ -936,7 +1277,7 @@ class voletautobe extends eqLogic {
      * Ce que les conditions d'un moment diraient si on était à son heure.
      *
      * Exactement ce que runSlot() évalue une fois le rendez-vous tombé, et dans
-     * le même ordre — couplage, soleil, température : le compte rendu de
+     * le même ordre — couplage, puis evaluateConditions() : le compte rendu de
      * l'essai doit désigner la même cause que le journal du lendemain, sans
      * quoi l'essai envoie corriger le mauvais réglage.
      *
@@ -957,35 +1298,28 @@ class voletautobe extends eqLogic {
             return array('would' => false, 'text' => self::wouldSkip(self::shadeEndReason()));
         }
 
-        $sun = self::sunNow();
-        $sunCheck = voletautobeSun::sunCheck($_slot, $sun['azimuth'], $sun['elevation']);
-        if (!$sunCheck['met']) {
-            return array('would' => false, 'text' => self::wouldSkip(self::sunReason($_slot, $sun, $sunCheck['reason'])));
-        }
-
-        $temperature = $this->temperature();
-        $check = voletautobeSun::temperatureCheck($_slot, $temperature);
-        if (!$check['met']) {
-            return array('would' => false, 'text' => self::wouldSkip(self::temperatureReason($_slot, $temperature)));
+        $verdict = $this->evaluateConditions($_key, $_slot);
+        if (!$verdict['met']) {
+            $text = self::wouldSkip($verdict['reason']);
+            /* La protection solaire ne s'arrête pas à ce refus : elle se
+             * réessaie tant que le soleil est sur la façade. Le taire ferait
+             * croire la journée perdue, et chercher un réglage à corriger. */
+            if ($_key == 'heat') {
+                $text .= ' ' . __('Elle se serait réessayée chaque minute tant que le soleil est sur la façade.', __FILE__);
+            }
+            return array('would' => false, 'text' => $text);
         }
 
         /* Le moment se serait joué — mais peut-être faute de savoir. Une sonde
          * muette et une position du soleil incalculable laissent passer l'ordre
          * par choix, et c'est précisément ce que l'essai doit montrer : la
          * condition est écrite, elle ne filtre rien. */
-        $notes = array();
-        if (!$sunCheck['known']) {
-            $notes[] = __('position du soleil inconnue, ordre envoyé quand même', __FILE__);
-        }
-        if (!$check['known']) {
-            $notes[] = __('sonde muette, ordre envoyé quand même', __FILE__);
-        }
-        if (count($notes) == 0) {
+        if (count($verdict['notes']) == 0) {
             return array('would' => true, 'text' => __('Au moment venu, ce moment aurait été joué.', __FILE__));
         }
         return array('would' => true,
                      'text'  => __('Au moment venu, ce moment aurait été joué :', __FILE__)
-                              . ' ' . implode(', ', $notes) . '.');
+                              . ' ' . implode(', ', $verdict['notes']) . '.');
     }
 
     /* « Au moment venu, ce moment aurait été sauté : 18,2 °C, seuil 26 °C. » Le
@@ -1021,26 +1355,60 @@ class voletautobe extends eqLogic {
      * Tout ce qui n'est pas un nombre — commande supprimée, sonde jamais
      * remontée, valeur vide — rend null, et null veut dire « on ne sait pas »,
      * jamais « 0 °C » : la différence décide de l'ouverture des volets un matin
-     * d'hiver.
+     * d'hiver. Une mesure trop vieille rend null elle aussi : voir
+     * DEFAULT_SENSOR_MAX_AGE.
      */
     public function temperature() {
-        $id = $this->temperatureCmdId();
-        if ($id === null) {
-            return null;
+        $state = $this->temperatureState();
+        return $state['value'];
+    }
+
+    /* La mesure et ce qu'on sait d'elle — voir readSensor(). */
+    public function temperatureState() {
+        return self::readSensor($this->temperatureCmdId());
+    }
+
+    /*
+     * Lit une sonde : array('value' => ?float, 'stale' => bool, 'age' => ?int).
+     *
+     * 'value' est null dès qu'on ne peut pas s'y fier, y compris quand la
+     * mesure est trop vieille — c'est alors 'stale' qui le dit, pour que le
+     * journal et l'interface parlent d'une sonde « figée » et non « muette » :
+     * l'une demande de changer une pile, l'autre de vérifier un réglage.
+     *
+     * L'âge se lit sur la date de collecte et non sur celle de la valeur : une
+     * sonde qui publie 21 °C chaque quart d'heure pendant une nuit entière est
+     * bien vivante, et le coeur avance cette date-là même quand la valeur ne
+     * change pas (eqLogic::checkAndUpdateCmd).
+     */
+    public static function readSensor($_cmdId) {
+        $state = array('value' => null, 'stale' => false, 'age' => null);
+        if ($_cmdId === null) {
+            return $state;
         }
         try {
-            $cmd = cmd::byId($id);
+            $cmd = cmd::byId($_cmdId);
             if (!is_object($cmd) || $cmd->getType() != 'info') {
-                return null;
+                return $state;
             }
             $value = $cmd->execCmd();
             if ($value === '' || $value === null || !is_numeric($value)) {
-                return null;
+                return $state;
             }
-            return (float) $value;
+            $collected = strtotime((string) $cmd->getCollectDate());
+            if ($collected !== false && $collected > 0) {
+                $state['age'] = max(0, time() - $collected);
+            }
+            $maxAge = self::sensorMaxAge();
+            if ($maxAge > 0 && $state['age'] !== null && $state['age'] > $maxAge) {
+                $state['stale'] = true;
+                return $state;
+            }
+            $state['value'] = (float) $value;
         } catch (Throwable $e) {
-            return null;
+            $state['value'] = null;
         }
+        return $state;
     }
 
     /* Le nom lisible de la sonde retenue, pour que l'interface dise laquelle
@@ -1076,6 +1444,90 @@ class voletautobe extends eqLogic {
         }
         if ($slot['temp_mode'] == voletautobeSun::TEMP_MAX) {
             return __('seulement si', __FILE__) . ' ≤ ' . self::formatTemperature($slot['temp_value']);
+        }
+        return '';
+    }
+
+    /* ============================================================= LUMINOSITÉ */
+
+    /*
+     * La sonde de luminosité du groupe, sinon celle du plugin, sinon aucune.
+     *
+     * Même règle que pour la température : une maison a une station météo, pas
+     * huit. Et la sonde est facultative de bout en bout — sans elle, un moment
+     * qui ne pose pas de condition de luminosité ne voit aucune différence.
+     */
+    public function luxCmdId() {
+        $id = $this->getConfiguration('lux_cmd', '');
+        if ($id === '' || $id === null) {
+            $id = config::byKey('lux_cmd', __CLASS__, '');
+        }
+        return (is_numeric($id) && (int) $id > 0) ? (int) $id : null;
+    }
+
+    public function lux() {
+        $state = $this->luxState();
+        return $state['value'];
+    }
+
+    public function luxState() {
+        return self::readSensor($this->luxCmdId());
+    }
+
+    public function luxName() {
+        $id = $this->luxCmdId();
+        if ($id === null) {
+            return '';
+        }
+        try {
+            $cmd = cmd::byId($id);
+            return is_object($cmd) ? $cmd->getHumanName() : '';
+        } catch (Throwable $e) {
+            return '';
+        }
+    }
+
+    /*
+     * L'unité de la sonde retenue, « lx » à défaut.
+     *
+     * Le seuil se règle dans l'unité de la sonde, que le plugin ne convertit
+     * pas : un pyranomètre en W/m² et un luxmètre ne parlent pas la même
+     * langue, et « 20 000 lx » écrit sous un seuil de 400 W/m² ferait douter
+     * du réglage. L'interface et les comptes rendus reprennent donc l'unité
+     * du capteur.
+     */
+    public function luxUnit() {
+        $id = $this->luxCmdId();
+        if ($id !== null) {
+            try {
+                $cmd = cmd::byId($id);
+                if (is_object($cmd) && trim((string) $cmd->getUnite()) !== '') {
+                    return trim((string) $cmd->getUnite());
+                }
+            } catch (Throwable $e) {
+            }
+        }
+        return 'lx';
+    }
+
+    /* « 20 000 lx », « 350 W/m² », « 6,5 » pour un indice UV sans unité. Les
+     * milliers séparés d'une espace, parce que 20000 et 2000 se confondent à
+     * l'oeil, et une décimale seulement si elle dit quelque chose. */
+    public static function formatLux($_value, $_unit = 'lx') {
+        $value = (float) $_value;
+        $decimals = (abs($value - round($value)) >= 0.05 && abs($value) < 100) ? 1 : 0;
+        $text = number_format($value, $decimals, ',', ' ');
+        return ($_unit === '') ? $text : $text . ' ' . $_unit;
+    }
+
+    /* La condition de luminosité d'un moment en toutes lettres, ou ''. */
+    public static function luxText($_slot, $_unit = 'lx') {
+        $slot = voletautobeSun::cleanSlot($_slot);
+        if ($slot['lux_mode'] == voletautobeSun::LUX_MIN) {
+            return __('seulement si luminosité', __FILE__) . ' ≥ ' . self::formatLux($slot['lux_value'], $_unit);
+        }
+        if ($slot['lux_mode'] == voletautobeSun::LUX_MAX) {
+            return __('seulement si luminosité', __FILE__) . ' ≤ ' . self::formatLux($slot['lux_value'], $_unit);
         }
         return '';
     }
@@ -1262,17 +1714,24 @@ class voletautobe extends eqLogic {
             $delay = $reduced;
         }
 
-        $firstOrder = true;
         foreach (is_array($volets) ? $volets : array() as $volet) {
-            /* Entre deux volets, et jamais après le dernier : attendre une fois
-             * le dernier ordre parti ne sert personne et allonge le cron pour
-             * rien. L'attente précède donc l'ordre, sauf pour le premier. */
-            if (!$firstOrder && $delay > 0) {
-                usleep($delay * 1000);
+            /* Entre deux ordres, et jamais après le dernier : attendre une fois
+             * le dernier ordre parti ne sert personne. L'attente se compte
+             * depuis le dernier ordre du processus, pas du groupe — voir
+             * $_lastOrderAt — et ne coûte donc rien au premier volet d'un
+             * groupe commandé seul, longtemps après le précédent. */
+            if ($delay > 0 && self::$_lastOrderAt > 0) {
+                $wait = self::$_lastOrderAt + ($delay / 1000) - microtime(true);
+                if ($wait > 0) {
+                    usleep((int) round($wait * 1000000));
+                }
             }
-            $firstOrder = false;
             try {
                 $this->pushVolet($volet, $action, $position);
+                /* Après l'envoi et seulement s'il a eu lieu : un volet
+                 * introuvable n'a mis aucune trame dans l'air, et faire
+                 * attendre le suivant pour lui ne protège rien. */
+                self::$_lastOrderAt = microtime(true);
                 $sent++;
             } catch (Throwable $e) {
                 $name = isset($volet['name']) ? $volet['name'] : ('#' . (isset($volet['eq']) ? $volet['eq'] : '?'));
@@ -1538,6 +1997,10 @@ class voletautobe extends eqLogic {
         if ($temperature !== null) {
             $this->checkAndUpdateCmd('temperature', $temperature);
         }
+        $lux = $this->lux();
+        if ($lux !== null) {
+            $this->checkAndUpdateCmd('luminosity', $lux);
+        }
 
         $location = self::location();
         $sun = voletautobeSun::sun($now, $location['latitude'], $location['longitude']);
@@ -1695,7 +2158,7 @@ class voletautobe extends eqLogic {
      * lundi au vendredi, seulement si ≥ 26 °C ». L'ordre lui-même n'y est pas :
      * il est donné à côté, par actionName(), et le répéter alourdirait la seule
      * ligne que l'utilisateur relit vraiment. */
-    public static function humanSlot($_slot) {
+    public static function humanSlot($_slot, $_luxUnit = 'lx') {
         $slot = voletautobeSun::cleanSlot($_slot);
         if ($slot['mode'] == voletautobeSun::MODE_FIXED) {
             $when = __('à', __FILE__) . ' ' . $slot['time'];
@@ -1768,6 +2231,10 @@ class voletautobe extends eqLogic {
         if ($temperature !== '') {
             $when .= ', ' . $temperature;
         }
+        $lux = self::luxText($slot, $_luxUnit);
+        if ($lux !== '') {
+            $when .= ', ' . $lux;
+        }
         return $when;
     }
 
@@ -1810,9 +2277,11 @@ class voletautobe extends eqLogic {
         }
         $needsSun = ($slot['mode'] != voletautobeSun::MODE_FIXED);
         $needsTemperature = ($slot['temp_mode'] != voletautobeSun::TEMP_NONE);
+        $needsLux = ($slot['lux_mode'] != voletautobeSun::LUX_NONE);
+        $luxUnit = $this->luxUnit();
         $needsSunPosition = ($slot['sun_mode'] != voletautobeSun::SUN_NONE);
         return array(
-            'summary'     => self::humanSlot($slot),
+            'summary'     => self::humanSlot($slot, $luxUnit),
             'occurrences' => $preview,
             'action'      => $slot['action'],
             'actionName'  => self::actionNoun($slot),
@@ -1840,6 +2309,9 @@ class voletautobe extends eqLogic {
              * où elle peut se voir.
              */
             'noSensor'    => ($needsTemperature && $this->temperature() === null) ? 1 : 0,
+            'lux'         => self::luxText($slot, $luxUnit),
+            /* La même panne silencieuse, pour la luminosité. */
+            'noLuxSensor' => ($needsLux && $this->lux() === null) ? 1 : 0,
         );
     }
 
@@ -1903,6 +2375,8 @@ class voletautobe extends eqLogic {
         $paused = 0;
         $blindConditions = 0;
         $blindWindows = 0;
+        $blindLux = 0;
+        $stale = 0;
         foreach ($groups as $eqLogic) {
             /* La liste est demandée une fois et relue deux fois : elle résout
              * chaque équipement, et la page Santé n'a pas à le faire deux fois
@@ -1923,7 +2397,15 @@ class voletautobe extends eqLogic {
             /* Une condition de température sans sonde lisible : le moment se
              * joue toujours, la condition ne filtre plus rien. Rien d'autre
              * dans Jeedom ne le dira. */
-            if ($eqLogic->temperature() === null) {
+            $temperatureState = $eqLogic->temperatureState();
+            $luxState = $eqLogic->luxState();
+            /* Une sonde figée se compte à part : elle a l'air de marcher, sa
+             * dernière valeur s'affiche partout, et c'est justement pourquoi
+             * personne ne la soupçonne. */
+            if ($temperatureState['stale'] || $luxState['stale']) {
+                $stale++;
+            }
+            if ($temperatureState['value'] === null) {
                 foreach (self::SLOTS as $key) {
                     $slot = $eqLogic->slotConfig($key);
                     if ($slot['enable'] == 1 && $slot['temp_mode'] != voletautobeSun::TEMP_NONE) {
@@ -1937,6 +2419,15 @@ class voletautobe extends eqLogic {
              * position du soleil n'est pas calculable, la condition ne filtre
              * plus rien, et le moment se joue tous les jours comme si la façade
              * était au soleil. */
+            if ($luxState['value'] === null) {
+                foreach (self::SLOTS as $key) {
+                    $slot = $eqLogic->slotConfig($key);
+                    if ($slot['enable'] == 1 && $slot['lux_mode'] != voletautobeSun::LUX_NONE) {
+                        $blindLux++;
+                        break;
+                    }
+                }
+            }
             if (!$location) {
                 foreach (self::SLOTS as $key) {
                     $slot = $eqLogic->slotConfig($key);
@@ -1989,6 +2480,22 @@ class voletautobe extends eqLogic {
                 'advice'  => ($blindConditions == 0) ? ''
                     : __('Leur condition de température est sans effet : faute de mesure, les volets bougent quand même. Choisissez une sonde dans la configuration du plugin ou du groupe.', __FILE__),
                 'state'   => ($blindConditions == 0),
+            ),
+            array(
+                'test'    => __('Sonde de luminosité', __FILE__),
+                'result'  => ($blindLux == 0)
+                    ? __('lisible ou inutilisée', __FILE__)
+                    : $blindLux . ' ' . __('groupe(s) sans mesure', __FILE__),
+                'advice'  => ($blindLux == 0) ? ''
+                    : __('Leur condition de luminosité est sans effet : faute de mesure, les volets bougent quand même. Choisissez une sonde dans la configuration du plugin ou du groupe.', __FILE__),
+                'state'   => ($blindLux == 0),
+            ),
+            array(
+                'test'    => __('Sondes figées', __FILE__),
+                'result'  => $stale,
+                'advice'  => ($stale == 0) ? ''
+                    : __('Aucune nouvelle mesure depuis plus longtemps que le délai réglé dans la configuration du plugin : leur dernière valeur est ignorée. Vérifiez la pile ou le plugin de la sonde.', __FILE__),
+                'state'   => ($stale == 0),
             ),
             array(
                 'test'    => __('Fenêtre de soleil', __FILE__),

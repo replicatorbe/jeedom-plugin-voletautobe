@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.3
+
+- **Une protection solaire écartée n'est plus perdue pour la journée.** Sautée à
+  l'arrivée du soleil — 24 °C à 11 h pour un seuil de 26 °C —, elle ne se jouait
+  plus, alors qu'il faisait 29 °C à 14 h et que c'est précisément pour cet
+  après-midi-là qu'on l'avait réglée. Elle est désormais réévaluée chaque minute
+  jusqu'à la fin de protection du jour si ce moment est coché, sinon jusqu'à ce
+  que le soleil quitte la façade, sinon jusqu'au coucher — moins une marge de
+  30 minutes, pour ne pas fermer à 17 h 41 et rouvrir à 17 h 42 —, et part la
+  première fois que ses conditions sont réunies. Le journal le suit sans se
+  répéter : « Protection solaire en attente : 24,1 °C, seuil 26 °C — nouvel essai
+  jusqu'à 17:30 », puis l'ordre « après attente des conditions », ou « abandonnée
+  pour aujourd'hui : conditions jamais réunies ». Les trois autres moments gardent
+  la règle d'une décision par jour.
+- **Une condition de luminosité, facultative.** Le plugin sait où est le soleil,
+  pas s'il brille : un jour couvert à 27 °C, la protection solaire fermait aux
+  trois quarts une pièce déjà grise. Chaque moment peut maintenant poser
+  « seulement si la luminosité atteint au moins » ou « ne dépasse pas » une
+  valeur, sur une sonde désignée dans la configuration du plugin ou dans le
+  groupe — luxmètre, station météo, capteur de rayonnement en W/m² ou indice UV,
+  le seuil s'écrivant dans l'unité de la sonde. Aucune condition n'est posée par
+  défaut : les installations existantes ne voient aucune différence. Une sonde
+  muette ne bloque rien, comme pour la température. Nouvelle commande info
+  « Luminosité retenue », historisée et masquée, et nouvelle ligne « Sonde de
+  luminosité » sur la page Santé.
+- **Une sonde figée est traitée comme muette.** Une sonde à la pile vide ne se
+  tait pas : Jeedom garde sa dernière valeur indéfiniment, et une condition
+  jugeait des jours durant sur la température d'un seul après-midi. Au-delà de
+  3 heures sans nouvelle mesure — réglable dans la configuration du plugin,
+  « Sonde muette après », 0 pour désactiver —, la valeur d'une sonde de
+  température ou de luminosité est ignorée et le moment est joué quand même. Le
+  journal écrit « figée depuis 5 h », l'onglet *Volets* du groupe affiche
+  « Sonde figée depuis 5 h » en orange, et la page Santé compte ces groupes sur
+  une ligne « Sondes figées ».
+- **L'attente entre deux ordres vaut aussi entre deux groupes.** Elle repartait
+  de zéro à chaque groupe : le soir, tous les groupes calés sur le coucher
+  partaient à la même minute, et le dernier volet d'un groupe et le premier du
+  suivant se chevauchaient dans la même milliseconde — la trame perdue que le
+  délai devait justement éviter. Elle se compte désormais depuis le dernier ordre
+  envoyé, tous groupes confondus.
+- **Les ordres programmés partent en arrière-plan.** Le cron de tous les plugins
+  tourne dans un seul processus, et l'attente entre ordres retenait d'autant le
+  thermostat, l'alarme et les scénarios programmés. Le cron décide toujours à la
+  minute dite — conditions, moment marqué joué —, mais l'envoi part dans une
+  seule tâche de fond du cœur pour toute la minute, pour garder l'attente entre
+  groupes. Il se fait sur place quand il n'y a rien à attendre — un seul volet,
+  ou un délai à 0 — ou si la tâche ne peut pas être lancée. Une tâche démarrée
+  au-delà du délai de rattrapage n'envoie rien, et le dit.
+
 ## 1.2
 
 - **La fin de protection ne défait plus ce que la protection n'a pas fait.** Les

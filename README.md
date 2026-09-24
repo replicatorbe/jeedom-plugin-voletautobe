@@ -22,9 +22,12 @@ et ne pas le faire quand la température s'y oppose.
   5 °C : en hiver, un volet fermé isole, et l'ouvrir à 7 h par −3 °C fait perdre
   de la chaleur pour trois heures de lumière grise. Ne fermer aux trois quarts
   qu'au-dessus de 26 °C : c'est la canicule qu'on vise, pas le mois d'avril.
-- **Une sonde en panne ne bloque rien.** Si la mesure est illisible, le moment
-  est joué quand même et le journal le dit. La condition est un raffinement, le
-  mouvement est le comportement normal.
+- **Une condition de luminosité, facultative.** Avec un luxmètre, une station
+  météo ou un capteur de rayonnement, ne pas fermer la protection solaire un
+  jour couvert. Le seuil s'écrit dans l'unité de la sonde.
+- **Une sonde en panne ne bloque rien.** Si la mesure est illisible, ou figée
+  depuis plus de 3 heures, le moment est joué quand même et le journal le dit.
+  La condition est un raffinement, le mouvement est le comportement normal.
 - **Des garde-fous.** « Jamais avant 18:00 » pour les soirs d'hiver où le soleil
   se couche à 16 h 40, « jamais avant 07:00 » pour les matins de juin.
 - **Une simulation de présence en un champ.** Un décalage aléatoire de ± n
@@ -60,7 +63,8 @@ rien ne le signale à part ce plugin.
 
 Une sonde de température n'est nécessaire que si vous vous servez des conditions
 de température. Elle se désigne une fois dans la configuration du plugin, et un
-groupe peut avoir la sienne.
+groupe peut avoir la sienne. Il en va de même, facultativement, d'une sonde de
+luminosité pour les conditions de luminosité.
 
 ## Installation
 
@@ -91,15 +95,21 @@ cron du cœur (chaque minute)
         │                                │
         │                       oui ─────┤
         │                                │
-        │              voletautobeSun::temperatureCheck()
-        │                  condition remplie, ou mesure inconnue
+        │     soleil, puis temperatureCheck(), puis luxCheck()
+        │         condition remplie, ou mesure inconnue ou figée
         │                                │
-        │                       oui ─────┴──► ordre à chaque volet du groupe
+        │                       oui ─────┴──► ordre retenu pour la minute
         │                       non ────────► journal + « Dernier changement »
+        │                                     (la protection solaire se
+        │                                      réessaie chaque minute)
+        │
+        ├─ les ordres de la minute, envoyés dans UNE tâche de fond du cœur
+        │     (voletautobe::sendOrders), un délai entre deux ordres compté
+        │     tous groupes confondus ; sur place s'il n'y a rien à attendre
         │
         └─ mise à jour des commandes d'information
-              « prochain changement », position réelle, température retenue,
-              heures du soleil
+              « prochain changement », position réelle, température et
+              luminosité retenues, heures du soleil
 ```
 
 Le calcul est dans `voletautobeSun`, qui ne connaît pas Jeedom : c'est ce qui

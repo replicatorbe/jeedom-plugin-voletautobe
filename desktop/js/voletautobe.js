@@ -48,6 +48,11 @@ var voletautobePicker = {
    ouverture ferait parcourir toutes les commandes de Jeedom pour rien. */
 var voletautobeSensors = null
 
+/* Les sondes de luminosité, sur la même règle : une liste à part, parce que
+   ce ne sont pas les mêmes commandes — mêler luxmètres et thermomètres dans
+   une seule liste ferait choisir une température comme seuil de lumière. */
+var voletautobeLuxSensors = null
+
 /* Vrai pendant que printEqLogic repose les valeurs à l'écran. Reposer une
    valeur dans un champ émet « change » exactement comme une saisie : sans ce
    drapeau, ouvrir un groupe suffirait à le déclarer modifié, et l'avertissement
@@ -312,19 +317,75 @@ function voletautobeShowPaused(_paused, _since) {
 /* La mesure retenue par le groupe, avec le nom de la sonde qui l'a donnée.
    Une condition de température réglée sur une sonde muette ne fait rien du
    tout : c'est ici, à côté du choix de la sonde, que ça doit se voir. */
-function voletautobeShowTemperature(_value, _name) {
-  var target = document.getElementById('span_voletautobeTemperature')
+function voletautobeShowTemperature(_value, _name, _stale, _age) {
+  voletautobeShowMeasure('span_voletautobeTemperature', _value, _name, '°C', _stale, _age)
+}
+
+/* La sœur pour la luminosité. L'unité est celle de la sonde : un luxmètre
+   parle en lx, un capteur de rayonnement en W/m², et afficher « lx » à côté
+   d'une mesure en W/m² ferait taper un seuil faux d'un facteur cent. */
+function voletautobeShowLux(_value, _name, _unit, _stale, _age) {
+  voletautobeShowMeasure('span_voletautobeLux', _value, _name,
+    (isset(_unit) && _unit !== '') ? _unit : 'lx', _stale, _age)
+  /* Sans sonde du tout, la luminosité n'est pas une panne : elle est
+     facultative, et la plupart des maisons n'en ont pas. L'orange est réservé
+     à la sonde choisie qui ne répond pas. */
+  var target = document.getElementById('span_voletautobeLux')
+  if (target !== null && _stale != 1 && (_value === null || _value === undefined || _value === '')
+      && !(isset(_name) && _name !== '')) {
+    target.className = 'label label-default'
+  }
+}
+
+/* L'âge d'une mesure en mots : « 40 min », « 5 h », « 3 j ». L'arrondi est
+   grossier exprès — il s'agit de dire qu'une sonde s'est tue, pas de dater la
+   dernière trame à la seconde. */
+function voletautobeFormatAge(_seconds) {
+  var seconds = parseInt(_seconds, 10)
+  if (isNaN(seconds) || seconds < 0) { return '' }
+  if (seconds < 3600) { return Math.max(1, Math.round(seconds / 60)) + ' {{min}}' }
+  if (seconds < 172800) { return Math.round(seconds / 3600) + ' {{h}}' }
+  return Math.round(seconds / 86400) + ' {{j}}'
+}
+
+/* L'étiquette commune aux deux sondes. Trois états, et trois textes :
+   - une mesure lisible, en bleu ;
+   - une sonde figée — sa dernière valeur date d'avant le délai réglé dans la
+     configuration du plugin. Le serveur la traite comme muette et ne renvoie
+     plus sa valeur, mais « — » mentirait sur la cause : une sonde figée est
+     presque toujours une pile vide, et c'est ce qu'il faut aller changer ;
+   - une sonde muette ou absente.
+   _stale et _age sont facultatifs : un appel à deux arguments garde le
+   comportement d'avant, celui de printEqLogic qui efface l'étiquette. */
+function voletautobeShowMeasure(_targetId, _value, _name, _unit, _stale, _age) {
+  var target = document.getElementById(_targetId)
   if (target === null) { return }
+  var hasName = (isset(_name) && _name !== '')
+  if (_stale == 1) {
+    var age = voletautobeFormatAge(_age)
+    target.className = 'label label-warning'
+    target.textContent = ((age !== '') ? '{{Sonde figée depuis}} ' + age : '{{Sonde figée}}')
+      + (hasName ? ' : ' + _name : '')
+    return
+  }
   if (_value === null || _value === undefined || _value === '') {
     target.className = 'label label-warning'
-    target.textContent = (isset(_name) && _name !== '')
-      ? '{{Sonde illisible}} : ' + _name
-      : '{{Aucune sonde}}'
+    target.textContent = hasName ? '{{Sonde illisible}} : ' + _name : '{{Aucune sonde}}'
     return
   }
   target.className = 'label label-info'
-  target.textContent = String(_value).replace('.', ',') + ' °C'
-    + ((isset(_name) && _name !== '') ? ' — ' + _name : '')
+  target.textContent = String(_value).replace('.', ',') + ' ' + _unit
+    + (hasName ? ' — ' + _name : '')
+}
+
+/* Pose l'unité de la sonde de luminosité dans les quatre moments : le seuil se
+   tape dans l'unité de la sonde qui le jugera, il doit se lire dans la même. */
+function voletautobeShowLuxUnit(_unit) {
+  var unit = (isset(_unit) && _unit !== '') ? _unit : 'lx'
+  var targets = document.querySelectorAll('.vabLuxUnit')
+  for (var i = 0; i < targets.length; i++) {
+    targets[i].textContent = unit
+  }
 }
 
 /* Où est le soleil maintenant, juste sous les deux azimuts de la façade. C'est
@@ -464,12 +525,23 @@ function voletautobeRefreshReach() {
    plugin » : sans cette seconde passe, la sonde choisie retomberait sur le
    défaut à chaque ouverture, et l'enregistrement suivant l'effacerait. */
 function voletautobeFillSensors(_selected) {
-  var select = document.getElementById('in_voletautobeSensor')
-  if (select === null || voletautobeSensors === null) { return }
+  voletautobeFillSensorSelect('in_voletautobeSensor', voletautobeSensors, _selected)
+}
+
+/* La même chose pour la sonde de luminosité : deux listes, une seule règle,
+   orpheline comprise — une sonde de luminosité supprimée se perdrait tout
+   aussi silencieusement qu'une sonde de température. */
+function voletautobeFillLuxSensors(_selected) {
+  voletautobeFillSensorSelect('in_voletautobeLuxSensor', voletautobeLuxSensors, _selected)
+}
+
+function voletautobeFillSensorSelect(_selectId, _sensors, _selected) {
+  var select = document.getElementById(_selectId)
+  if (select === null || _sensors === null) { return }
 
   while (select.options.length > 1) { select.remove(1) }
-  for (var i = 0; i < voletautobeSensors.length; i++) {
-    var sensor = voletautobeSensors[i]
+  for (var i = 0; i < _sensors.length; i++) {
+    var sensor = _sensors[i]
     var option = document.createElement('option')
     option.value = sensor.id
     var suffix = (isset(sensor.object) && sensor.object !== '') ? ' — ' + sensor.object : ''
@@ -499,9 +571,20 @@ function voletautobeLoadSensors(_selected) {
   }, { silent: true })
 }
 
+function voletautobeLoadLuxSensors(_selected) {
+  if (voletautobeLuxSensors !== null) {
+    voletautobeFillLuxSensors(_selected)
+    return
+  }
+  voletautobeAjax('luminosities', {}, function (result) {
+    voletautobeLuxSensors = isset(result.sensors) ? result.sensors : []
+    voletautobeFillLuxSensors(_selected)
+  }, { silent: true })
+}
+
 /* Ce que le serveur sait du groupe : ses volets tels qu'ils s'appellent
    aujourd'hui, les prochaines occurrences de chaque moment, et la température
-   qu'il retiendrait maintenant. */
+   et la luminosité qu'il retiendrait maintenant. */
 function voletautobeLoadGroup(_id) {
   voletautobeAjax('group', { id: _id }, function (result) {
     /* La réponse peut arriver après que l'utilisateur a ouvert un autre groupe :
@@ -529,9 +612,22 @@ function voletautobeLoadGroup(_id) {
       voletautobeShowPreview(voletautobeSlots[s], result[voletautobeSlots[s]])
     }
     voletautobeShowPaused(result.paused == 1, result.pausedSince)
+    /* Une sonde figée revient avec une température nulle — le serveur la
+       traite comme muette — mais avec son âge : l'étiquette dit alors « figée
+       depuis 5 h » plutôt qu'un « — » qui ferait chercher la panne ailleurs
+       que dans la pile. */
     voletautobeShowTemperature(
       isset(result.temperature) ? result.temperature : null,
-      isset(result.temperatureName) ? result.temperatureName : '')
+      isset(result.temperatureName) ? result.temperatureName : '',
+      isset(result.temperatureStale) ? result.temperatureStale : 0,
+      isset(result.temperatureAge) ? result.temperatureAge : null)
+    voletautobeShowLux(
+      isset(result.lux) ? result.lux : null,
+      isset(result.luxName) ? result.luxName : '',
+      isset(result.luxUnit) ? result.luxUnit : 'lx',
+      isset(result.luxStale) ? result.luxStale : 0,
+      isset(result.luxAge) ? result.luxAge : null)
+    voletautobeShowLuxUnit(isset(result.luxUnit) ? result.luxUnit : 'lx')
     voletautobeShowSun(
       isset(result.azimuth) ? result.azimuth : null,
       isset(result.elevation) ? result.elevation : null)
@@ -1114,27 +1210,31 @@ function voletautobePickerValidate() {
    Sa fin, elle, n'en pose aucune : à l'instant où le soleil quitte la façade, il
    n'y est par définition plus. Une fenêtre de soleil en condition ferait sauter
    la réouverture tous les jours, et les volets resteraient baissés jusqu'au
-   soir — exactement ce que ce moment existe pour éviter. */
+   soir — exactement ce que ce moment existe pour éviter.
+
+   Aucun moment ne pose de condition de luminosité, pas même la protection
+   solaire à qui elle servirait le plus : elle suppose une sonde que la plupart
+   des maisons n'ont pas, et c'est à l'utilisateur qui en a une de la poser. */
 var voletautobeDefaults = {
   morning: {
     enable: 1, action: 'up', position: 100, mode: 'sunrise', time: '07:00', offset: 0,
     random: 0, not_before: '07:00', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'none', temp_value: '', sun_mode: 'none'
+    temp_mode: 'none', temp_value: '', lux_mode: 'none', lux_value: '', sun_mode: 'none'
   },
   heat: {
     enable: 0, action: 'position', position: 30, mode: 'facade_in', time: '13:00', offset: 0,
     random: 0, not_before: '', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'min', temp_value: '26', sun_mode: 'none'
+    temp_mode: 'min', temp_value: '26', lux_mode: 'none', lux_value: '', sun_mode: 'none'
   },
   shade_end: {
     enable: 0, action: 'up', position: 100, mode: 'facade_out', time: '17:00', offset: 0,
     random: 0, not_before: '', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'none', temp_value: '', sun_mode: 'none'
+    temp_mode: 'none', temp_value: '', lux_mode: 'none', lux_value: '', sun_mode: 'none'
   },
   evening: {
     enable: 1, action: 'down', position: 0, mode: 'sunset', time: '21:00', offset: 0,
     random: 0, not_before: '18:00', not_after: '', days: [1, 2, 3, 4, 5, 6, 7],
-    temp_mode: 'none', temp_value: '', sun_mode: 'none'
+    temp_mode: 'none', temp_value: '', lux_mode: 'none', lux_value: '', sun_mode: 'none'
   }
 }
 
@@ -1177,6 +1277,9 @@ function voletautobeSyncSlotUi(_key) {
 
   var hasCondition = (block.querySelector('.vabTempMode').value !== 'none')
   block.querySelector('.vabTempBlock').style.display = hasCondition ? '' : 'none'
+
+  var hasLux = (block.querySelector('.vabLuxMode').value !== 'none')
+  block.querySelector('.vabLuxBlock').style.display = hasLux ? '' : 'none'
 
   var hasSun = (block.querySelector('.vabSunMode').value !== 'none')
   block.querySelector('.vabSunBlock').style.display = hasSun ? '' : 'none'
@@ -1258,6 +1361,10 @@ function voletautobeReadSlot(_key) {
        serveur qui normalise, et convertir ici ferait deux règles pour un même
        « 5,5 ». */
     temp_value: block.querySelector('.vabTempValue').value,
+    /* Même règle pour la luminosité : « 20 000 » part avec son espace, et
+       c'est le serveur qui le relit. */
+    lux_mode: block.querySelector('.vabLuxMode').value,
+    lux_value: block.querySelector('.vabLuxValue').value,
     /* Le moment ne porte plus d'angles : « sur la façade » veut dire celle du
        groupe, et c'est le serveur qui l'y recopie avant tout calcul. Les relire
        ici, dans des champs qui n'existent plus, écrirait l'orientation de la
@@ -1286,7 +1393,19 @@ function voletautobeApplySlot(_key, _slot) {
     block.querySelector('.eqLogicAttr[data-l3key="not_after"]').value = slot.not_after
     block.querySelector('.vabTempMode').value = slot.temp_mode
     block.querySelector('.vabTempValue').value = slot.temp_value
+    block.querySelector('.vabLuxMode').value = slot.lux_mode
+    block.querySelector('.vabLuxValue').value = slot.lux_value
     block.querySelector('.vabSunMode').value = slot.sun_mode
+  }
+
+  /* Un moment enregistré avant que la luminosité existe n'a pas de lux_mode :
+     le coeur ne pose alors rien dans la liste, qui resterait sur ce qu'y a
+     laissé le groupe précédent — ou sur rien du tout, et c'est une chaîne vide
+     qui partirait au prochain enregistrement. « Sans condition » est ce que ce
+     moment faisait jusqu'ici : c'est ce qu'il doit continuer à faire. */
+  if (!isset(slot.lux_mode) || slot.lux_mode === '') {
+    block.querySelector('.vabLuxMode').value = 'none'
+    block.querySelector('.vabLuxValue').value = ''
   }
 
   var offset = parseInt(slot.offset, 10)
@@ -1358,6 +1477,14 @@ function voletautobeShowPreview(_key, _preview) {
     target.appendChild(document.createElement('br'))
     target.appendChild(voletautobeText('small', 'text-danger',
       '{{Aucune sonde lisible : cette condition de température est sans effet, le moment sera joué quand même.}}'))
+  }
+  /* Même panne, même avertissement, pour la luminosité : une condition posée
+     sur un luxmètre à la pile vide laisserait croire que la protection attend
+     le soleil, alors qu'elle part à chaque fois. */
+  if (_preview.noLuxSensor == 1) {
+    target.appendChild(document.createElement('br'))
+    target.appendChild(voletautobeText('small', 'text-danger',
+      '{{Aucune sonde de luminosité lisible : cette condition est sans effet, le moment sera joué quand même.}}'))
   }
 
   /* Les heures et les positions de soleil ci-dessus sont plausibles et fausses
@@ -1435,8 +1562,11 @@ function printEqLogic(_eqLogic) {
        la mesure garderaient l'état du groupe précédemment ouvert. */
     voletautobeShowPaused(false, '')
     voletautobeShowTemperature(null, '')
+    voletautobeShowLux(null, '', 'lx')
+    voletautobeShowLuxUnit('lx')
     voletautobeShowSun(null, null)
     voletautobeLoadSensors(isset(configuration.temperature_cmd) ? configuration.temperature_cmd : '')
+    voletautobeLoadLuxSensors(isset(configuration.lux_cmd) ? configuration.lux_cmd : '')
   } finally {
     voletautobeRendering = false
   }
@@ -1546,7 +1676,8 @@ voletautobeContainer.addEventListener('change', function (event) {
   var block = event.target.closest('.vabSlot')
   if (block === null) { return }
   if (event.target.closest('.vabMode') || event.target.closest('.vabAction')
-      || event.target.closest('.vabTempMode') || event.target.closest('.vabSunMode')) {
+      || event.target.closest('.vabTempMode') || event.target.closest('.vabLuxMode')
+      || event.target.closest('.vabSunMode')) {
     voletautobeSyncSlotUi(block.getAttribute('data-slot'))
   }
   /* Les jours, le décalage et le pourcentage ne sont pas des .eqLogicAttr : le

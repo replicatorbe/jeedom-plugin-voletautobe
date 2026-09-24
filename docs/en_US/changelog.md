@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.3
+
+- **A sun protection held back is no longer lost for the day.** Skipped when the
+  sun arrived — 24 °C at 11 am for a 26 °C threshold —, it did not play any more,
+  although it was 29 °C at 2 pm and that afternoon was precisely what it had been
+  set up for. It is now evaluated again every minute until the day's end of
+  protection if that moment is ticked, otherwise until the sun leaves the facade,
+  otherwise until sunset — minus a 30-minute margin, so as not to close at
+  5:41 pm and open again at 5:42 pm —, and sets off the first time its conditions
+  are met. The log follows it without repeating itself: "Sun protection waiting:
+  24.1 °C, threshold 26 °C — retrying until 17:30", then the order "after waiting
+  for the conditions", or "given up for today: conditions never met". The three
+  other moments keep the one-decision-a-day rule.
+- **An optional brightness condition.** The plugin knows where the sun is, not
+  whether it shines: on an overcast day at 27 °C, the sun protection closed three
+  quarters of the way a room that was already grey. Every moment can now set
+  "only if the brightness reaches at least" or "does not exceed" a value, on a
+  sensor picked in the plugin configuration or in the group — lux meter, weather
+  station, radiation sensor in W/m² or UV index, the threshold being written in
+  the sensor's unit. No condition is set by default: existing installations see
+  no difference. A silent sensor blocks nothing, as for the temperature. New
+  "Brightness used" info command, logged and hidden, and a new "Brightness
+  sensor" line on the Health page.
+- **A frozen sensor is treated as silent.** A sensor with a flat battery does not
+  go quiet: Jeedom keeps its last value indefinitely, and a condition judged for
+  days on end on the temperature of a single afternoon. Beyond 3 hours without a
+  new reading — adjustable in the plugin configuration, "Sensor silent after", 0
+  to disable —, the value of a temperature or brightness sensor is ignored and
+  the moment is played anyway. The log writes "frozen for 5 h", the group's
+  *Shutters* tab shows "Sensor frozen for 5 h" in orange, and the Health page
+  counts those groups on a "Frozen sensors" line.
+- **The wait between two orders also applies between two groups.** It started
+  from zero again for each group: in the evening, every group set on sunset left
+  in the same minute, and one group's last shutter and the next group's first
+  overlapped in the same millisecond — the very lost frame the delay was meant to
+  prevent. It is now counted from the last order sent, all groups together.
+- **Scheduled orders are sent in the background.** Every plugin's cron runs in a
+  single process, and the wait between orders held back the thermostat, the
+  alarm and the scheduled scenarios by as much. The cron still decides at the
+  scheduled minute — conditions, moment marked played —, but the sending goes
+  into a single background task of the core for the whole minute, to keep the
+  wait between groups. It happens on the spot when there is nothing to wait for
+  — a single shutter, or a delay of 0 — or if the task cannot be started. A task
+  started beyond the catch-up window sends nothing, and says so.
+
 ## 1.2
 
 - **The end of protection no longer undoes what the protection did not do.** The

@@ -26,6 +26,11 @@ extérieure, pas huit : la régler une fois évite de la choisir groupe par grou
 et un groupe pourra toujours avoir la sienne s'il le faut — la chambre au nord,
 une véranda.
 
+Une sonde de luminosité — un luxmètre, une station météo, un capteur de
+rayonnement — est tout à fait facultative. Elle ne sert qu'aux conditions de
+luminosité, que personne n'est obligé de poser ; si vous en avez une, désignez-la
+de la même façon, une fois pour toute la maison.
+
 ## Une convention à retenir : 0 % = fermé, 100 % = ouvert
 
 Partout dans le plugin, dans l'interface comme dans les commandes, **0 % veut
@@ -46,8 +51,9 @@ qu'il faut régler.
 1. **Plugins → Automatisation → Volets Auto → Ajouter un groupe.** Donnez-lui le
    nom de ce qu'il commande.
 2. **Choisir les volets.** Le bouton ouvre le sélecteur.
-3. **Onglet Volets.** Dites vers où regarde la façade, et choisissez la sonde de
-   température si vous comptez vous servir des conditions.
+3. **Onglet Volets.** Dites vers où regarde la façade, et choisissez les sondes
+   de température et de luminosité si vous comptez vous servir des conditions
+   et que celles du plugin ne conviennent pas.
 4. **Onglet Programmation.** Réglez le matin, réglez le soir, et la protection
    solaire si vous en voulez une.
 5. **Sauvegarder.** Il n'y a rien d'autre à faire.
@@ -225,6 +231,36 @@ frais pour qu'elle ferme est un jour où la fin de protection n'a rien à rouvri
 et elle se tait. La section qui lui est consacrée dit pourquoi, et dans quel cas
 elle joue malgré tout toute seule.
 
+### Une protection écartée se réessaie
+
+La protection solaire est le seul moment qui ne se décide pas une fois pour
+toutes. Écartée par ses conditions à l'arrivée du soleil — 24 °C à 11 h pour un
+seuil de 26 °C —, elle n'est pas perdue pour la journée : c'est précisément pour
+l'après-midi à 29 °C qu'on l'a réglée. Elle est donc **réévaluée chaque minute**,
+et part la première fois que ses conditions sont réunies.
+
+Les nouveaux essais durent :
+
+- jusqu'à la **fin de protection** du jour, si ce moment est coché — fermer après
+  la réouverture laisserait la pièce à 30 % jusqu'au soir ;
+- sinon jusqu'à ce que **le soleil quitte la façade** ;
+- sinon jusqu'au **coucher du soleil** ;
+
+à chaque fois **moins une marge de 30 minutes** : fermer à 17 h 41 pour rouvrir à
+17 h 42, ce sont deux trajets de moteur pour rien.
+
+Le journal et la commande **Dernier changement** suivent l'attente sans la
+répéter chaque minute. Le premier refus s'écrit avec l'heure limite —
+« Protection solaire en attente : 24,1 °C, seuil 26 °C — nouvel essai jusqu'à
+17:30 » —, puis vient soit l'ordre, marqué « après attente des conditions », soit
+« Protection solaire abandonnée pour aujourd'hui : conditions jamais réunies ».
+Le bouton **Essayer ce moment** le rappelle aussi : quand il répond que la
+protection aurait été sautée, il précise qu'elle se serait réessayée.
+
+Le premier essai, lui, obéit à la règle commune : il doit avoir lieu à l'heure
+dite ou pendant le rattrapage. Une box redémarrée à 15 h ne commence pas à
+attendre une protection qui était due à 11 h.
+
 ## La condition de température
 
 Chaque moment peut être soumis à une condition : **aucune**, **seulement si la
@@ -265,10 +301,38 @@ La panne se voit tout de même : la page **Santé** compte les groupes qui posen
 une condition de température sans sonde lisible, et l'aperçu du moment le
 signale sous le réglage.
 
+### Une sonde figée compte comme muette
+
+Une sonde dont la pile meurt ne dit pas qu'elle s'est tue : Jeedom garde sa
+dernière valeur, indéfiniment. Un 27 °C relevé un après-midi de juillet ferait
+alors fermer la protection solaire toute la semaine suivante, pluie comprise, et
+un matin d'octobre jugerait l'hiver entier sur cette seule mesure.
+
+Le plugin regarde donc l'âge de la dernière mesure. **Au-delà de 3 heures sans
+nouvelle mesure**, la sonde est traitée comme muette : sa valeur est ignorée, la
+condition ne filtre plus rien, et le moment est joué quand même. Le délai se
+règle dans la configuration du plugin, champ **Sonde muette après**, de 0 à
+168 heures ; **0 désactive le contrôle**. Trois heures laissent passer une
+station météo qui ne publie qu'une fois l'heure. Une sonde qui publie la même
+valeur tous les quarts d'heure est bien vivante : c'est la date de collecte qui
+compte, pas le changement de valeur.
+
+Le contrôle vaut pour la température comme pour la luminosité, et il se voit
+partout où il faut :
+
+- le journal dit « sonde de température figée depuis 5 h, ordre envoyé quand
+  même » plutôt que « muette » — l'un demande de changer une pile, l'autre de
+  vérifier un réglage ;
+- l'onglet *Volets* du groupe affiche « Sonde figée depuis 5 h » en orange à la
+  place de la mesure ;
+- la page **Santé** compte les groupes concernés sur une ligne « Sondes figées ».
+
 ### La décision se prend une seule fois
 
 La condition est évaluée à l'heure dite, une fois, et le moment est marqué joué
-qu'il ait bougé ou non. Il ne se rejoue pas pendant le rattrapage.
+qu'il ait bougé ou non. Il ne se rejoue pas pendant le rattrapage. La protection
+solaire fait seule exception, pour les raisons dites plus haut : écartée, elle
+se réessaie tant que le soleil est sur la façade.
 
 C'est voulu : sans cela, un matin sauté à 07:00 pour 4 °C repartirait tout seul à
 07:12 parce que le soleil a chauffé la sonde. Un volet qui part un quart d'heure
@@ -279,6 +343,53 @@ ce jour-là ne sera pas fait.
 Quand un moment est sauté, le journal et la commande **Dernier changement** le
 disent avec les chiffres : « Matin sauté : 1,5 °C, seuil 5 °C ». Vous n'avez
 jamais à deviner pourquoi les volets n'ont pas bougé.
+
+## La condition de luminosité
+
+Le plugin sait **où** est le soleil, pas **s'il brille**. Un jour couvert à
+27 °C, le soleil est sur la façade — par le calcul — et il fait chaud, mais rien
+ne tape sur la vitre : fermer aux trois quarts plonge la pièce dans la pénombre
+pour rien. Seule une mesure de lumière sait qu'il y a des nuages.
+
+Chaque moment peut donc recevoir une **condition de luminosité**, bâtie
+exactement comme celle de température : **sans condition**, **seulement si la
+luminosité atteint au moins** une valeur, ou **seulement si elle ne dépasse
+pas** une valeur. Elle est **facultative partout**, protection solaire comprise :
+aucun moment n'en pose à la création, et un groupe enregistré avant cette
+version continue de faire exactement ce qu'il faisait.
+
+L'usage type : la protection solaire, « seulement si la luminosité atteint au
+moins 20 000 lx ». Le jour de grand soleil, elle ferme ; le jour gris, elle se
+tait — et, comme elle se réessaie chaque minute, elle ferme quand même si le ciel
+se dégage dans l'après-midi.
+
+**La sonde.** Un luxmètre, la luminosité d'une station météo, un capteur de
+rayonnement solaire en W/m², ou un indice UV : tous répondent aussi bien à la
+seule question posée — soleil ou nuages ? — et beaucoup de stations météo ne
+publient que les deux derniers. Comme pour la température, elle se désigne une
+fois dans la configuration du plugin, bloc **Luminosité**, et un groupe peut
+choisir la sienne dans son onglet *Volets* ; l'option vide veut dire « celle du
+plugin ». La mesure s'affiche à côté, avec son unité. La liste ne propose pas le
+niveau de variation des lampes, qui n'a rien à dire du ciel, ni la « Luminosité
+retenue » des groupes du plugin.
+
+**Le seuil s'écrit dans l'unité de la sonde.** Le plugin ne convertit rien : un
+seuil de 20 000 a du sens en lux, pas en W/m², où l'on écrira plutôt 300 ou 400.
+L'unité affichée à côté du champ est celle de la sonde retenue par le groupe, et
+les comptes rendus la reprennent. « 20 000 » peut se taper avec l'espace des
+milliers.
+
+Toutes les règles de la température valent ici :
+
+- **une sonde muette ou figée ne bloque rien** : le moment est joué quand même,
+  le journal le dit, l'aperçu du moment l'écrit en rouge sous le réglage, et la
+  page **Santé** compte les groupes concernés sur une ligne « Sonde de
+  luminosité » ;
+- **un moment sauté donne ses chiffres** : « Protection solaire sautée :
+  luminosité 8 000 lx, seuil 20 000 lx ».
+
+Quand plusieurs conditions sont posées, la luminosité est regardée en dernier,
+après le soleil et la température : c'est un raffinement du raffinement.
 
 ## La position du soleil
 
@@ -798,6 +909,7 @@ tient en deux champs, dans **Réglages → Système → Configuration → Géné
 | **Position** | action curseur | Place tout le groupe à un pourcentage. 0 % = fermé, 100 % = ouvert. |
 | **État** | info numérique | La position du groupe, moyenne de celles que ses volets publient. Historisée. |
 | **Température retenue** | info numérique | La mesure sur laquelle les conditions ont été évaluées. Historisée : c'est elle qui explique, trois jours plus tard, pourquoi le matin a été sauté. |
+| **Luminosité retenue** | info numérique | La mesure de la sonde de luminosité, dans son unité. Historisée, pour la même raison ; vide tant qu'aucune sonde n'est choisie. |
 | **Dernier changement** | info | « Ouvert aujourd'hui 07:12 (programmation) », ou « Matin sauté : 1,5 °C, seuil 5 °C ». Répond seule à « est-ce que ça a marché ce matin ? ». |
 | **Programmation active** | info binaire | 0 quand le groupe est suspendu. Historisée. |
 | **Suspendre** / **Reprendre** | action | Le mode vacances, pilotable en scénario. |
@@ -884,11 +996,44 @@ votre passerelle 433 MHz reste capricieuse. Huit volets à 400 ms, cela fait
 2,8 secondes pour tout le groupe : c'est invisible sur des volets qui mettent
 vingt secondes à descendre.
 
+**L'attente vaut entre deux groupes aussi.** Elle se compte depuis le dernier
+ordre envoyé, tous groupes confondus, et non depuis le début de chaque groupe. Le
+soir, tous les groupes calés sur le coucher du soleil partent à la même minute ;
+si le compteur repartait de zéro à chaque groupe, le dernier volet du salon et le
+premier de la chambre partiraient dans la même milliseconde — exactement la
+trame perdue que le délai existe pour éviter. La passerelle radio ne sait pas à
+quel groupe appartient une trame. À l'inverse, un groupe commandé seul, longtemps
+après le précédent, n'attend rien pour son premier volet.
+
 L'attente totale d'un groupe est plafonnée à **30 secondes**. Un groupe de cent
-volets réglé à 500 ms bloquerait le cron cinquante secondes, ce que le cœur de
-Jeedom n'accepte pas ; au-delà du plafond, le délai effectif est réduit d'autant
-et le journal le note en niveau debug — c'est un détail d'exécution, pas un
-événement.
+volets réglé à 500 ms mettrait cinquante secondes à tout envoyer ; au-delà du
+plafond, le délai effectif est réduit d'autant et le journal le note en niveau
+debug — c'est un détail d'exécution, pas un événement.
+
+### Les ordres programmés partent en arrière-plan
+
+Le cron de chaque plugin tourne dans le même processus que celui de tous les
+autres, l'un après l'autre. Attendre 400 ms entre vingt volets au coucher du
+soleil, c'était retenir huit secondes le thermostat, l'alarme et les scénarios
+programmés de toute l'installation.
+
+La **décision** reste prise dans le cron, à la minute dite : conditions évaluées,
+moment marqué joué. Seul l'**envoi** part dans une tâche de fond du cœur — **une
+seule pour toute la minute**, et non une par groupe, sans quoi deux groupes
+enverraient de nouveau leurs trames en même temps. Les ordres y partent l'un
+après l'autre, avec l'attente décrite plus haut.
+
+L'envoi se fait sur place, comme avant, quand il n'y a rien à attendre — un seul
+volet à commander, ou un délai réglé à 0 —, et aussi quand la tâche de fond ne
+peut pas être lancée : le journal le signale alors en avertissement (« Envoi en
+arrière-plan impossible, ordres envoyés sur place »). Une tâche que le cœur ne
+démarrerait que trop tard, au-delà du délai de rattrapage — box surchargée,
+redémarrage —, n'envoie rien et le dit : une fermeture de 21 h ne part pas à 3 h
+du matin.
+
+Les boutons du groupe, les commandes **Ouvrir**, **Fermer** et **Position**
+appelées depuis un scénario, et le bouton **Essayer ce moment** envoient toujours
+sur place : il n'y a là aucun cron à ne pas retenir.
 
 ## La page Santé
 
@@ -902,6 +1047,8 @@ bien ? ». Le plugin n'y compte que des choses qui ne se voient pas autrement :
 | **Groupes suspendus** | la panne la plus discrète du plugin : tout fonctionne, et rien ne bouge. |
 | **Volets programmés** | le nombre de volets que le plugin commande. |
 | **Sonde de température** | les groupes qui posent une condition de température sans sonde lisible : elle ne filtre plus rien. |
+| **Sonde de luminosité** | la même chose pour la luminosité. « Lisible ou inutilisée » : un groupe sans condition de luminosité n'a pas besoin de sonde, et ne compte pas. |
+| **Sondes figées** | les groupes dont une sonde, de température ou de luminosité, n'a rien publié depuis plus longtemps que le délai réglé dans la configuration : sa dernière valeur est ignorée. Vérifiez la pile ou le plugin de la sonde. |
 | **Fenêtre de soleil** | les groupes qui se servent du soleil sans position d'installation. |
 | **Volets introuvables** | les volets dont l'équipement n'existe plus dans Jeedom. |
 
@@ -962,6 +1109,24 @@ ouverture de la page.
 **Ma sonde de température est en panne, que se passe-t-il ?** Les moments sont
 joués quand même, sans condition. C'est délibéré : un automatisme ne doit pas se
 taire parce qu'un capteur s'est tu. La page Santé compte les groupes dans ce cas.
+
+**Ma sonde affiche une valeur, mais le groupe dit « Sonde figée ».** Sa dernière
+mesure date de plus longtemps que le délai de la configuration du plugin — 3 h
+par défaut. Jeedom continue d'afficher cette valeur partout, mais le plugin ne
+s'y fie plus. Changez la pile, ou vérifiez le plugin qui la publie ; si c'est une
+sonde qui ne publie que rarement, allongez le délai **Sonde muette après**, ou
+mettez-le à 0 pour désactiver le contrôle.
+
+**Ma protection solaire a été sautée le matin, puis a fermé à 14 h. Est-ce
+normal ?** Oui. Écartée à l'arrivée du soleil, elle se réessaie chaque minute
+jusqu'à la fin de protection, au départ du soleil ou au coucher, moins une demi-
+heure, et part dès que ses conditions sont réunies. Le journal dit « en attente
+… nouvel essai jusqu'à … » puis « après attente des conditions ».
+
+**Comment éviter de fermer la protection solaire un jour couvert ?** Avec une
+condition de luminosité — « seulement si la luminosité atteint au moins
+20 000 lx » — et une sonde de luminosité désignée dans la configuration du plugin
+ou dans le groupe. Le seuil s'écrit dans l'unité de la sonde.
 
 **Comment savoir dans quelle direction regarde ma façade ?** Ouvrez le groupe au
 moment où le soleil tape dessus et lisez la position du soleil affichée sous le

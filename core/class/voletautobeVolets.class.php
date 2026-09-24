@@ -381,6 +381,46 @@ class voletautobeVolets {
         return (strpos(self::normalize(isset($_cmd['name']) ? $_cmd['name'] : ''), 'temp') !== false);
     }
 
+    /*
+     * Une commande est-elle une mesure de luminosité ?
+     *
+     * Même démarche que pour la température : le type générique d'abord, puis
+     * l'unité, puis le nom. LIGHT_BRIGHTNESS n'y figure pas, et c'est voulu :
+     * c'est le niveau de variation d'une lampe, pas la lumière du jour, et une
+     * condition posée dessus dépendrait de l'éclairage du salon.
+     *
+     * Le rayonnement solaire (W/m²) et l'indice UV sont acceptés : ils
+     * répondent aussi bien que des lux à la seule question posée — y a-t-il
+     * du soleil sur la vitre ou des nuages ? — et beaucoup de stations météo
+     * ne publient que ceux-là.
+     */
+    public static function isLuminosity($_cmd) {
+        $generics = array('BRIGHTNESS', 'UV');
+        $generic = isset($_cmd['generic']) ? (string) $_cmd['generic'] : '';
+        $type = isset($_cmd['type']) ? $_cmd['type'] : '';
+        $subType = isset($_cmd['subType']) ? $_cmd['subType'] : '';
+
+        if ($generic !== '' && in_array($generic, $generics) && $type == 'info') {
+            return true;
+        }
+        if ($type != 'info' || $subType != 'numeric') {
+            return false;
+        }
+        $unit = strtoupper(str_replace(array(' ', '²', '.'), array('', '2', ''), isset($_cmd['unit']) ? (string) $_cmd['unit'] : ''));
+        if (in_array($unit, array('LX', 'LUX', 'KLX', 'KLUX', 'W/M2', 'WM2'))) {
+            return true;
+        }
+        /* « luminosite » et non « lumin » : un « Luminaire » est une lampe, et
+         * son niveau de variation n'a rien à dire du ciel. */
+        $name = self::normalizeWords(isset($_cmd['name']) ? $_cmd['name'] : '');
+        foreach (array('luminosite', 'luminance', 'lux', 'eclairement', 'rayonnement', 'irradiance', 'illuminance', 'uv') as $word) {
+            if (preg_match('/\b' . $word . '/', $name)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /* ==================================================== CÔTÉ JEEDOM */
 
     /*
@@ -525,10 +565,29 @@ class voletautobeVolets {
      * reste distinguable de « Température » quand il y en a une par étage.
      */
     public static function discoverTemperatures() {
+        return self::discoverSensors(array(__CLASS__, 'isTemperature'));
+    }
+
+    /* Les sondes de luminosité, sous la même forme, pour la condition de
+     * luminosité. Une maison en compte encore moins que de sondes de
+     * température, souvent une seule, sur la station météo. */
+    public static function discoverLuminosities() {
+        return self::discoverSensors(array(__CLASS__, 'isLuminosity'));
+    }
+
+    /* Le parcours commun aux deux listes : seul le critère change. */
+    private static function discoverSensors($_matcher) {
         $sensors = array();
 
         foreach (eqLogic::all() as $eqLogic) {
             if ($eqLogic->getIsEnable() != 1) {
+                continue;
+            }
+            /* Les groupes du plugin publient leur « Température retenue » et
+             * leur « Luminosité retenue » : ce sont des copies de la sonde
+             * choisie, et en choisir une comme sonde ferait tourner la
+             * condition en rond sur la valeur de la veille. */
+            if ($eqLogic->getEqType_name() == 'voletautobe') {
                 continue;
             }
             $objectName = '';
@@ -550,7 +609,7 @@ class voletautobeVolets {
                     'generic' => (string) $cmd->getGeneric_type(),
                     'unit'    => (string) $cmd->getUnite(),
                 );
-                if (!self::isTemperature($description)) {
+                if (!call_user_func($_matcher, $description)) {
                     continue;
                 }
 

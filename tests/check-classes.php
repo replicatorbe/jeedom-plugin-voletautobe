@@ -24,7 +24,9 @@ $problems = array();
  * DB::save() traite les autres comme des colonnes de la table : une propriété
  * « $refreshError » fait échouer la création d'un équipement sur « Unknown
  * column », sans que le journal du plugin en dise un mot. */
-preg_match_all('/^\s*(?:private|protected|public)\s+(?!static|function)\$(\w+)/m', $source, $m);
+/* Les propriétés statiques comprises : DB::getFields() les lit elles aussi
+ * par réflexion, sans distinguer. */
+preg_match_all('/^\s*(?:private|protected|public)\s+(?:static\s+)?(?!function)\$(\w+)/m', $source, $m);
 foreach ($m[1] as $name) {
     if (strpos($name, '_') !== 0) {
         $problems[] = 'Propriété sans souligné initial : $' . $name
