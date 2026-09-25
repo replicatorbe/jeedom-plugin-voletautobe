@@ -137,8 +137,8 @@ class voletautobe extends eqLogic {
      * tombent à la même minute ; si le compteur repartait de zéro à chaque
      * groupe, le dernier volet du salon et le premier de la chambre partiraient
      * dans la même milliseconde — exactement la perte de trame que l'attente
-     * existe pour éviter. Le souligné initial n'est pas décoratif : voir
-     * CLAUDE.md, le coeur prend toute propriété sans souligné pour une colonne.
+     * existe pour éviter. Le souligné initial n'est pas décoratif : DB::save()
+     * prend toute propriété sans souligné pour une colonne de la table.
      */
     private static $_lastOrderAt = 0.0;
 
